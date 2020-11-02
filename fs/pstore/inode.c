@@ -36,6 +36,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/htc_debug_tools.h>
 
 #include "internal.h"
 
@@ -139,6 +140,11 @@ static ssize_t pstore_file_read(struct file *file, char __user *userbuf,
 
 	if (ps->record->type == PSTORE_TYPE_FTRACE)
 		return seq_read(file, userbuf, count, ppos);
+#if defined(CONFIG_HTC_DEBUG_BOOTLOADER_LOG)
+	if (ps->record->type == PSTORE_TYPE_CONSOLE) {
+		return bldr_log_read(ps->record->buf, ps->total_size, userbuf, count, ppos);
+	}
+#endif
 	return simple_read_from_buffer(userbuf, count, ppos,
 				       ps->record->buf, ps->total_size);
 }
@@ -342,8 +348,8 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 			  record->compressed ? ".enc.z" : "");
 		break;
 	case PSTORE_TYPE_CONSOLE:
-		scnprintf(name, sizeof(name), "console-%s-%llu",
-			  record->psi->name, record->id);
+		scnprintf(name, sizeof(name), "console-%s",
+			  record->psi->name);
 		break;
 	case PSTORE_TYPE_FTRACE:
 		scnprintf(name, sizeof(name), "ftrace-%s-%llu",

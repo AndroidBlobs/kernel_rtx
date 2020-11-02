@@ -16,12 +16,36 @@
 #ifdef CONFIG_CMA
 #include <linux/cma.h>
 #endif
+#include <linux/ion_kernel.h>
+#include <linux/msm_kgsl.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include "internal.h"
 
 void __attribute__((weak)) arch_report_meminfo(struct seq_file *m)
 {
+}
+
+void driver_report_meminfo(struct seq_file *m)
+{
+	unsigned long kgsl_alloc = kgsl_get_alloc_size();
+	struct ion_mem_stat ion;
+
+	ion_get_meminfo(&ion);
+	/*
+	 * display in kilobytes.
+	 */
+#define K(x) ((x) << (PAGE_SHIFT - 10))
+
+	seq_printf(m,
+		"KgslAlloc:      %8lu kB\n"
+		"IonTotal:       %8lu kB\n"
+		"IonInUse:       %8lu kB\n",
+		(kgsl_alloc >> 10),
+		K(ion.total),
+		K(ion.inuse));
+
+#undef K
 }
 
 static void show_val_kb(struct seq_file *m, const char *s, unsigned long num)
@@ -158,6 +182,8 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	hugetlb_report_meminfo(m);
 
 	arch_report_meminfo(m);
+
+	driver_report_meminfo(m);
 
 	return 0;
 }
