@@ -2538,6 +2538,11 @@ static int sdhci_msm_setup_vreg(struct sdhci_msm_pltfm_data *pdata,
 	vreg_table[0] = curr_slot->vdd_data;
 	vreg_table[1] = curr_slot->vdd_io_data;
 
+	if(enable ^ vreg_table[0]->is_enabled) {
+		pr_info("SD : %s slot power\n",
+			enable ? "Enabling" : "Disabling");
+		}
+
 	for (i = 0; i < ARRAY_SIZE(vreg_table); i++) {
 		if (vreg_table[i]) {
 			if (enable)
