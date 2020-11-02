@@ -671,6 +671,7 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 	struct device *cpu_dev;
 	int ret = 0;
 	int cpu = 0;
+	int result = 0;
 
 	/* Request state should be less than max_level */
 	if (WARN_ON(state > cpufreq_cdev->max_level))
@@ -691,9 +692,14 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 		if (cpu_online(cpu) &&
 			(!cpumask_test_and_set_cpu(cpu,
 			&cpus_isolated_by_thermal))) {
-			if (sched_isolate_cpu(cpu))
+			result = sched_isolate_cpu(cpu);
+			if (result) {
+				pr_info("[THERMAL]CPU%d isolation failed. result=%d\n", cpu, result);
 				cpumask_clear_cpu(cpu,
 					&cpus_isolated_by_thermal);
+			} else {
+				pr_info("[THERMAL]CPU%d is isolated.\n", cpu);
+			}
 		}
 		cpumask_set_cpu(cpu, &cpus_in_max_cooling_level);
 		blocking_notifier_call_chain(&cpu_max_cooling_level_notifer,
@@ -709,6 +715,7 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 			goto update_frequency;
 		} else if (cpumask_test_and_clear_cpu(cpu,
 			&cpus_isolated_by_thermal)) {
+			pr_info("[THERMAL]CPU%d is unisolated.\n", cpu);
 			sched_unisolate_cpu(cpu);
 		}
 		cpumask_clear_cpu(cpu, &cpus_in_max_cooling_level);

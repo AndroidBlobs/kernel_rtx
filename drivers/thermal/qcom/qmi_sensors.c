@@ -37,6 +37,8 @@
 #define QMI_FL_SIGN_BIT		31
 #define QMI_MANTISSA_MSB	23
 
+#define QMI_INVALID_TEMP	-255000
+
 enum qmi_ts_sensor {
 	QMI_TS_PA,
 	QMI_TS_PA_1,
@@ -301,9 +303,12 @@ static int qmi_sensor_read(void *data, int *temp)
 {
 	struct qmi_sensor *qmi_sens = (struct qmi_sensor *)data;
 
-	if (qmi_sens->connection_active && !atomic_read(&in_suspend))
+	if (qmi_sens->connection_active && !atomic_read(&in_suspend)) {
 		qmi_ts_request(qmi_sens, true);
-	*temp = qmi_sens->last_reading;
+		*temp = qmi_sens->last_reading;
+	} else {
+		*temp = QMI_INVALID_TEMP;
+	}
 
 	return 0;
 }

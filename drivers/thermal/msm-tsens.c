@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,6 +22,14 @@
 #include <linux/thermal.h>
 #include "tsens.h"
 #include "qcom/qti_virtual_sensor.h"
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+#define MONITOR_TSENS_NUM_CONTROLLER	2
+static struct workqueue_struct *monitor_tsense_wq = NULL;
+struct delayed_work monitor_tsens_status_worker;
+static void monitor_tsens_status(struct work_struct *work);
+struct tsens_device *monitor_tsens_status_tmdev[MONITOR_TSENS_NUM_CONTROLLER];
+#endif
 
 LIST_HEAD(tsens_device_list);
 
@@ -165,8 +173,6 @@ static int get_device_tree_data(struct platform_device *pdev,
 		return PTR_ERR(tmdev->tsens_tm_addr);
 	}
 
-	tmdev->phys_addr_tm = res_tsens_mem->start;
-
 	/* TSENS eeprom register region */
 	res_tsens_mem = platform_get_resource_byname(pdev,
 				IORESOURCE_MEM, "tsens_eeprom_physical");
@@ -225,20 +231,64 @@ static int tsens_thermal_zone_register(struct tsens_device *tmdev)
 
 static int tsens_tm_remove(struct platform_device *pdev)
 {
-	struct tsens_device *tmdev = platform_get_drvdata(pdev);
-
-	if (tmdev)
-		list_del(&tmdev->list);
 	platform_set_drvdata(pdev, NULL);
 
 	return 0;
 }
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+#define MESSAGE_SIZE		256
+#define THERMAL_LOG_PATTERN	"[THERMAL] :"
+static void monitor_tsens_status(struct work_struct *work)
+{
+	unsigned int i, j;
+	int temp = 0, ret = 0;
+	char thermal_message[MESSAGE_SIZE] = {0};
+	int idx = 0, substr_len = 0;
+
+	strncat(thermal_message, THERMAL_LOG_PATTERN, sizeof(thermal_message) - strlen(thermal_message) - 1);
+	idx = sizeof(THERMAL_LOG_PATTERN) - 1;
+
+	for(i = 0 ; i < MONITOR_TSENS_NUM_CONTROLLER ; i++) {
+		if (monitor_tsens_status_tmdev[i] == NULL) {
+			printk("[THERMAL] tsens%d_controller doesn't initialize yet\n", i);
+			continue;
+		}
+		for (j = 0 ; j < TSENS_MAX_SENSORS; j++) {
+			if (monitor_tsens_status_tmdev[i]->sensor[j].tzd != NULL) {
+				ret = monitor_tsens_status_tmdev[i]->ops->get_temp(
+					&(monitor_tsens_status_tmdev[i]->sensor[j]), &temp );
+				if (!ret) {
+					substr_len = scnprintf(thermal_message + idx, MESSAGE_SIZE, "%s(%d,%d.%d)",
+							j > 0 ? "," : "",
+							monitor_tsens_status_tmdev[i]->sensor[j].tzd->id,
+							temp/1000,
+							abs(temp%1000)/100);
+					idx += substr_len;
+				}
+			}
+		}
+		//log: [THERMAL] (0,30.6),(1,30.6),(2,30.6),(3,30.3),(4,29.9),(5,30.6)...
+		printk("%s\n", thermal_message);
+		idx = sizeof(THERMAL_LOG_PATTERN) - 1;
+		thermal_message[idx] = '\0';
+	}
+
+	if (monitor_tsense_wq)
+		queue_delayed_work(monitor_tsense_wq, &monitor_tsens_status_worker, msecs_to_jiffies(60000));
+}
+#endif
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+int tsens_tm_probe_count = 0;
+#endif
 int tsens_tm_probe(struct platform_device *pdev)
 {
 	struct tsens_device *tmdev = NULL;
 	int rc;
-	char tsens_name[40];
+#ifdef CONFIG_HTC_POWER_DEBUG
+	int i;
+#endif
 
 	if (!(pdev->dev.of_node))
 		return -ENODEV;
@@ -275,35 +325,32 @@ int tsens_tm_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	snprintf(tsens_name, sizeof(tsens_name), "tsens_%pa_0",
-					&tmdev->phys_addr_tm);
-
-	tmdev->ipc_log0 = ipc_log_context_create(IPC_LOGPAGES,
-							tsens_name, 0);
-	if (!tmdev->ipc_log0)
-		pr_err("%s : unable to create IPC Logging 0 for tsens %pa",
-					__func__, &tmdev->phys_addr_tm);
-
-	snprintf(tsens_name, sizeof(tsens_name), "tsens_%pa_1",
-					&tmdev->phys_addr_tm);
-
-	tmdev->ipc_log1 = ipc_log_context_create(IPC_LOGPAGES,
-							tsens_name, 0);
-	if (!tmdev->ipc_log1)
-		pr_err("%s : unable to create IPC Logging 1 for tsens %pa",
-					__func__, &tmdev->phys_addr_tm);
-
-	snprintf(tsens_name, sizeof(tsens_name), "tsens_%pa_2",
-					&tmdev->phys_addr_tm);
-
-	tmdev->ipc_log2 = ipc_log_context_create(IPC_LOGPAGES,
-							tsens_name, 0);
-	if (!tmdev->ipc_log2)
-		pr_err("%s : unable to create IPC Logging 2 for tsens %pa",
-					__func__, &tmdev->phys_addr_tm);
-
 	list_add_tail(&tmdev->list, &tsens_device_list);
 	platform_set_drvdata(pdev, tmdev);
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+	for (i = 0 ; i < MONITOR_TSENS_NUM_CONTROLLER ; i++) {
+		if (tmdev == monitor_tsens_status_tmdev[i])
+			break;
+		if (monitor_tsens_status_tmdev[i] == NULL) {
+			monitor_tsens_status_tmdev[i] = tmdev;
+			break;
+		}
+	}
+
+	if (!tsens_tm_probe_count) {
+		tsens_tm_probe_count++;
+		if (monitor_tsense_wq == NULL) {
+			/* Create private workqueue... */
+			monitor_tsense_wq = create_workqueue("monitor_tsense_wq");
+			printk(KERN_INFO "Create monitor tsense workqueue(0x%p)...\n", monitor_tsense_wq);
+		}
+		if (monitor_tsense_wq) {
+			INIT_DELAYED_WORK(&monitor_tsens_status_worker, monitor_tsens_status);
+			queue_delayed_work(monitor_tsense_wq, &monitor_tsens_status_worker, msecs_to_jiffies(0));
+		}
+	}
+#endif
 
 	return rc;
 }
@@ -315,7 +362,6 @@ static struct platform_driver tsens_tm_driver = {
 		.name = "msm-tsens",
 		.owner = THIS_MODULE,
 		.of_match_table = tsens_table,
-		.suppress_bind_attrs = true,
 	},
 };
 

@@ -25,6 +25,7 @@
 #include <net/netlink.h>
 #include <net/genetlink.h>
 #include <linux/suspend.h>
+#include <linux/htc_flags.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/thermal.h>
@@ -37,6 +38,7 @@ MODULE_DESCRIPTION("Generic thermal management sysfs support");
 MODULE_LICENSE("GPL v2");
 
 #define THERMAL_MAX_ACTIVE	16
+#define FORCE_CHARGE            (1<<2)
 
 static DEFINE_IDA(thermal_tz_ida);
 static DEFINE_IDA(thermal_cdev_ida);
@@ -389,7 +391,6 @@ static void handle_critical_trips(struct thermal_zone_device *tz,
 				  int trip, enum thermal_trip_type trip_type)
 {
 	int trip_temp;
-
 	tz->ops->get_trip_temp(tz, trip, &trip_temp);
 
 	/* If we have not crossed the trip_temp, we do not care. */
@@ -405,6 +406,11 @@ static void handle_critical_trips(struct thermal_zone_device *tz,
 		dev_emerg(&tz->device,
 			  "critical temperature reached (%d C), shutting down\n",
 			  tz->temperature / 1000);
+		if (get_kernel_flag() & FORCE_CHARGE) {
+			printk("%s: [%s, %d C] ignore power-off action when kernelflag[6] set to 4.\n",
+				__func__, tz->type, tz->temperature / 1000);
+			return;
+		}
 		mutex_lock(&poweroff_lock);
 		if (!power_off_triggered) {
 			/*
@@ -488,8 +494,7 @@ void thermal_zone_device_update_temp(struct thermal_zone_device *tz,
 {
 	int count;
 
-	if (atomic_read(&in_suspend) && (!tz->ops->is_wakeable ||
-		!(tz->ops->is_wakeable(tz))))
+	if (atomic_read(&in_suspend))
 		return;
 
 	trace_thermal_device_update(tz, event);
@@ -509,8 +514,7 @@ void thermal_zone_device_update(struct thermal_zone_device *tz,
 {
 	int count;
 
-	if (atomic_read(&in_suspend) && (!tz->ops->is_wakeable ||
-		!(tz->ops->is_wakeable(tz))))
+	if (atomic_read(&in_suspend))
 		return;
 
 	if (!tz->ops->get_temp)
@@ -1599,9 +1603,6 @@ static int thermal_pm_notify(struct notifier_block *nb,
 	case PM_POST_SUSPEND:
 		atomic_set(&in_suspend, 0);
 		list_for_each_entry(tz, &thermal_tz_list, node) {
-			if (tz->ops->is_wakeable &&
-				tz->ops->is_wakeable(tz))
-				continue;
 			thermal_zone_device_reset(tz);
 			thermal_zone_device_update(tz,
 						   THERMAL_EVENT_UNSPECIFIED);
