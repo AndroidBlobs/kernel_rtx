@@ -40,6 +40,7 @@
 #include <linux/of.h>
 #include <asm/current.h>
 #include <linux/timer.h>
+#include <linux/htc_flags.h>
 
 #include "peripheral-loader.h"
 
@@ -124,6 +125,80 @@ static const char * const restart_levels[] = {
 	[RESET_SUBSYS_COUPLED] = "RELATED",
 };
 
+#if defined(CONFIG_HTC_DEBUG_SSR)
+/**
+ * MSS restart reason feature (Non-block)
+ */
+
+#define RD_BUF_SIZE			  256
+#define MODEM_ERRMSG_LIST_LEN 10
+
+struct msm_msr_info {
+	int valid;
+	struct timespec msr_time;
+	char modem_errmsg[RD_BUF_SIZE];
+};
+int msm_msr_index = 0;
+static struct msm_msr_info msr_info_list[MODEM_ERRMSG_LIST_LEN];
+
+static ssize_t subsystem_restart_reason_nonblock_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+
+	int i = 0;
+	char tmp[RD_BUF_SIZE+30];
+
+	for( i=0; i<MODEM_ERRMSG_LIST_LEN; i++ ) {
+		if( msr_info_list[i].valid != 0 ) {
+			//Copy errmsg to buf
+			snprintf(tmp, RD_BUF_SIZE+30, "%ld-%s|\n\r",
+				msr_info_list[i].msr_time.tv_sec,
+				msr_info_list[i].modem_errmsg);
+			strcat(buf, tmp);
+			memset(tmp, 0, RD_BUF_SIZE+30);
+		}
+		msr_info_list[i].valid = 0;
+		memset(msr_info_list[i].modem_errmsg, 0, RD_BUF_SIZE);
+	}
+	strcat(buf, "\n\r\0");
+
+	return strlen(buf);
+}
+
+void subsystem_restart_reason_nonblock_init(void)
+{
+	int i = 0;
+	msm_msr_index = 0;
+	for( i=0; i<MODEM_ERRMSG_LIST_LEN; i++ ) {
+		msr_info_list[i].valid = 0;
+		memset(msr_info_list[i].modem_errmsg, 0, RD_BUF_SIZE);
+	}
+}
+
+#define subsystem_restart_ro_attr(_name) \
+	static struct kobj_attribute _name##_attr = {  \
+		.attr   = {                             \
+			.name = __stringify(_name),     \
+			.mode = 0444,                   \
+		},                                      \
+		.show   = _name##_show,                 \
+		.store  = NULL,         \
+	}
+
+
+subsystem_restart_ro_attr(subsystem_restart_reason_nonblock);
+
+
+static struct attribute *g[] = {
+	&subsystem_restart_reason_nonblock_attr.attr,
+	NULL,
+};
+
+static struct attribute_group attr_group = {
+	.attrs = g,
+};
+#endif
+
 /**
  * struct subsys_tracking - track state of a subsystem or restart order
  * @p_state: private state of subsystem/order
@@ -200,6 +275,13 @@ struct subsys_device {
 	int count;
 	int id;
 	int restart_level;
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	bool enable_ramdump;
+#endif
+#if defined(CONFIG_HTC_DEBUG_SSR)
+#define HTC_DEBUG_SSR_REASON_LEN 80
+	char restart_reason[HTC_DEBUG_SSR_REASON_LEN];
+#endif
 	int crash_count;
 	struct subsys_soc_restart_order *restart_order;
 	bool do_ramdump_on_put;
@@ -236,6 +318,12 @@ static struct subsys_tracking *subsys_get_track(struct subsys_device *subsys)
 	else
 		return &subsys->track;
 }
+
+int subsys_get_state(struct subsys_device *dev)
+{
+	return dev->track.state;
+}
+EXPORT_SYMBOL(subsys_get_state);
 
 static ssize_t name_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
@@ -315,6 +403,17 @@ static ssize_t firmware_name_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(firmware_name);
 
+#if defined(CONFIG_HTC_DEBUG_SSR)
+void subsys_set_restart_reason(struct subsys_device *dev, const char* reason)
+{
+	if (!dev || !reason)
+		return;
+	snprintf(dev->restart_reason, sizeof(dev->restart_reason) - 1, "%s",
+		reason);
+}
+EXPORT_SYMBOL(subsys_set_restart_reason);
+#endif /* CONFIG_HTC_DEBUG_SSR */
+
 static ssize_t system_debug_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
@@ -348,6 +447,209 @@ static ssize_t system_debug_store(struct device *dev,
 	return orig_count;
 }
 static DEVICE_ATTR_RW(system_debug);
+
+static ssize_t crashed_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	bool crashed = to_subsys(dev)->crashed;
+
+	if (crashed)
+		return snprintf(buf, PAGE_SIZE, "%s\n", "TRUE");
+	else
+		return snprintf(buf, PAGE_SIZE, "%s\n", "FALSE");
+}
+
+static ssize_t crashed_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct subsys_device *subsys = to_subsys(dev);
+	const char *p;
+
+	p = memchr(buf, '\n', count);
+	if (p)
+		count = p - buf;
+
+	if (!strncasecmp(buf, "FALSE", count)) {
+		subsys->crashed = false;
+		return count;
+	}
+	return -EPERM;
+}
+static DEVICE_ATTR_RW(crashed);
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+static const char * const enable_ramdumps_str[] = {
+	"DISABLE",
+	"ENABLE",
+};
+
+static ssize_t enable_ramdump_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	int enable_ramdump = to_subsys(dev)->enable_ramdump;
+
+	return snprintf(buf, PAGE_SIZE, "%s\n", enable_ramdumps_str[enable_ramdump]);
+}
+
+static ssize_t enable_ramdump_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct subsys_device *subsys = to_subsys(dev);
+	int i;
+	const char *p;
+
+	p = memchr(buf, '\n', count);
+	if (p)
+		count = p - buf;
+
+	for (i = 0; i < ARRAY_SIZE(enable_ramdumps_str); i++)
+		if (!strncasecmp(buf, enable_ramdumps_str[i], count)) {
+			subsys->enable_ramdump = i;
+			return count;
+		}
+
+	return -EPERM;
+}
+
+static DEVICE_ATTR_RW(enable_ramdump);
+
+void subsys_set_enable_ramdump(struct subsys_device *dev, int enable)
+{
+	dev->enable_ramdump = enable;
+}
+
+void subsys_set_restart_level(struct subsys_device *dev, int level)
+{
+	dev->restart_level = level;
+}
+
+static void subsys_config_default_enable_ramdump(struct subsys_device *dev)
+{
+	subsys_set_enable_ramdump(dev, false);
+}
+
+static void subsys_config_default_restart_level(struct subsys_device *dev)
+{
+	subsys_set_restart_level(dev, RESET_SOC);
+}
+
+void subsys_config_modem_enable_ramdump(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_MODEM);
+	bool b2 = !!(get_radio_flag() & BIT(3));
+	bool enable = (b0 ^ b1) && b2;
+
+	subsys_set_enable_ramdump(dev, enable);
+}
+
+void subsys_config_modem_restart_level(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_MODEM);
+	bool enable = b0 ^ b1;
+
+	subsys_set_restart_level(dev, enable);
+}
+
+void subsys_config_esoc0_enable_ramdump(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_MODEM);
+	bool b2 = !!(get_radio_flag() & BIT(3));
+	bool enable = (b0 ^ b1) && b2;
+
+	subsys_set_enable_ramdump(dev, enable);
+}
+
+void subsys_config_esoc0_restart_level(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_MODEM);
+	bool enable = b0 ^ b1;
+
+	subsys_set_restart_level(dev, enable);
+}
+
+static void subsys_config_adsp_restart_level(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_LPASS_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_LPASS);
+	bool enable = b0 || b1;
+
+	subsys_set_restart_level(dev, enable);
+}
+
+void subsys_config_wigig_enable_ramdump(struct subsys_device *dev)
+{
+    bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_WCNSS_ENABLE);
+    bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_WCNSS);
+    bool b2 = !!(get_radio_flag() & BIT(3));
+    bool enable = (b0 ^ b1) && b2;
+
+    subsys_set_enable_ramdump(dev, enable);
+}
+
+void subsys_config_wigig_restart_level(struct subsys_device *dev)
+{
+    bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_WCNSS_ENABLE);
+    bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_WCNSS);
+    bool enable = b0 ^ b1;
+    
+    subsys_set_restart_level(dev, enable);
+}
+
+static void subsys_config_wcnss_restart_level(struct subsys_device *dev)
+{
+	bool b0 = IS_ENABLED(CONFIG_HTC_FEATURES_SSR_WCNSS_ENABLE);
+	bool b1 = !!(get_kernel_flag() & KERNEL_FLAG_ENABLE_SSR_WCNSS);
+	bool enable = b0 || b1;
+
+	subsys_set_restart_level(dev, enable);
+}
+
+void subsys_config_enable_ramdump(struct subsys_device *dev)
+{
+	if (!strcmp(htc_get_bootmode(),"ftm"))
+		return subsys_config_default_enable_ramdump(dev);
+
+	if (!strcmp(dev->desc->name, "modem"))
+		return subsys_config_modem_enable_ramdump(dev);
+
+	if (!strcmp(dev->desc->name, "esoc0"))
+		return subsys_config_esoc0_enable_ramdump(dev);
+
+	if (!strcmp(dev->desc->name, "WIGIG"))
+		return subsys_config_wigig_enable_ramdump(dev);
+
+	if (!strcmp(htc_get_bootmode(),"factory2"))
+		return subsys_config_default_enable_ramdump(dev);
+
+	return subsys_config_default_enable_ramdump(dev);
+}
+
+void subsys_config_restart_level(struct subsys_device *dev)
+{
+	if (!strcmp(htc_get_bootmode(),"ftm"))
+		return subsys_config_default_restart_level(dev);
+
+	if (!strcmp(dev->desc->name, "modem"))
+		return subsys_config_modem_restart_level(dev);
+
+	if (!strcmp(dev->desc->name, "esoc0"))
+		return subsys_config_esoc0_restart_level(dev);
+
+	if (!strcmp(htc_get_bootmode(),"factory2"))
+		return subsys_config_default_restart_level(dev);
+
+	if (!strcmp(dev->desc->name, "adsp"))
+		return subsys_config_adsp_restart_level(dev);
+
+	if (!strcmp(dev->desc->name, "wcnss"))
+		return subsys_config_wcnss_restart_level(dev);
+
+	if (!strcmp(dev->desc->name, "WIGIG"))
+		return subsys_config_wigig_restart_level(dev);
+
+	return subsys_config_default_restart_level(dev);
+}
+#endif
 
 int subsys_get_restart_level(struct subsys_device *dev)
 {
@@ -388,6 +690,10 @@ static struct attribute *subsys_attrs[] = {
 	&dev_attr_name.attr,
 	&dev_attr_state.attr,
 	&dev_attr_crash_count.attr,
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	&dev_attr_enable_ramdump.attr,
+#endif
+	&dev_attr_crashed.attr,
 	&dev_attr_restart_level.attr,
 	&dev_attr_firmware_name.attr,
 	&dev_attr_system_debug.attr,
@@ -510,6 +816,9 @@ out:
 
 static int is_ramdump_enabled(struct subsys_device *dev)
 {
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	return dev->enable_ramdump;
+#endif
 	if (dev->desc->ramdump_disable_irq)
 		return !dev->desc->ramdump_disable;
 
@@ -655,7 +964,11 @@ static void notify_each_subsys_device(struct subsys_device **list,
 			send_sysmon_notif(dev);
 
 		notif_data.crashed = subsys_get_crash_status(dev);
+#if defined (CONFIG_HTC_FEATURES_SSR)
+		notif_data.enable_ramdump = dev->enable_ramdump;
+#else
 		notif_data.enable_ramdump = is_ramdump_enabled(dev);
+#endif
 		notif_data.enable_mini_ramdumps = enable_mini_ramdumps;
 		notif_data.no_auth = dev->desc->no_auth;
 		notif_data.pdev = pdev;
@@ -1175,7 +1488,21 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 	struct subsys_tracking *track;
 	unsigned long flags;
 
-	pr_debug("Restarting %s [level=%s]!\n", desc->name,
+#if defined(CONFIG_HTC_DEBUG_SSR)
+	/* Modem_BSP for nonblock restart reason */
+	if (!strncmp(name, "modem", SUBSYS_NAME_MAX_LENGTH)) {
+		msr_info_list[msm_msr_index].valid = 1;
+		msr_info_list[msm_msr_index].msr_time = current_kernel_time();
+		snprintf(msr_info_list[msm_msr_index].modem_errmsg, RD_BUF_SIZE,
+			"%s", dev->restart_reason);
+
+		if(++msm_msr_index >= MODEM_ERRMSG_LIST_LEN)
+			msm_msr_index = 0;
+	}
+	/* Modem_BSP for nonblock restart reason */
+#endif
+
+	pr_info("Restarting %s [level=%s]!\n", desc->name,
 			restart_levels[dev->restart_level]);
 
 	track = subsys_get_track(dev);
@@ -1210,8 +1537,13 @@ static void device_restart_work_hdlr(struct work_struct *work)
 	 * sync() and fclose() on attempting the dump.
 	 */
 	msleep(100);
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+	panic("SSR: %s crashed. %s", dev->desc->name, dev->restart_reason);
+#else
 	panic("subsys-restart: Resetting the SoC - %s crashed.",
 							dev->desc->name);
+#endif
 }
 
 int subsystem_restart_dev(struct subsys_device *dev)
@@ -1806,6 +2138,10 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	subsys->notify = subsys_notif_add_subsys(desc->name);
 	subsys->early_notify = subsys_get_early_notif_info(desc->name);
 
+#if defined(CONFIG_HTC_DEBUG_SSR)
+	memset(subsys->restart_reason, 0, sizeof(subsys->restart_reason));
+#endif
+
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wakeup_source_init(&subsys->ssr_wlock, subsys->wlname);
 	INIT_WORK(&subsys->work, subsystem_restart_wq_func);
@@ -1873,6 +2209,9 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	INIT_LIST_HEAD(&subsys->list);
 	list_add_tail(&subsys->list, &subsys_list);
 	mutex_unlock(&subsys_list_lock);
+
+	subsys_config_enable_ramdump(subsys);
+	subsys_config_restart_level(subsys);
 
 	if (ofnode) {
 		ret = subsys_setup_irqs(subsys);
@@ -1950,6 +2289,22 @@ static struct notifier_block panic_nb = {
 static int __init subsys_restart_init(void)
 {
 	int ret;
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+	struct kobject *properties_kobj;
+	/* Modem_BSP for nonblock restart reason */
+	subsystem_restart_reason_nonblock_init();
+	properties_kobj = kobject_create_and_add("subsystem_restart_properties",
+						NULL);
+	if (properties_kobj) {
+		ret = sysfs_create_group(properties_kobj, &attr_group);
+		if (ret) {
+			pr_err("subsys_restart_init: sysfs_create_group failed\n");
+			return ret;
+		}
+	}
+	/* Modem_BSP for nonblock restart reason */
+#endif
 
 	ssr_wq = alloc_workqueue("ssr_wq",
 		WQ_UNBOUND | WQ_HIGHPRI | WQ_CPU_INTENSIVE, 0);

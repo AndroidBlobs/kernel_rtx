@@ -94,5 +94,8 @@ obj-$(CONFIG_QCOM_MEM_OFFLINE) += mem-offline.o
 obj-$(CONFIG_QCOM_CDSP_RM) += cdsprm.o
 obj-$(CONFIG_QCOM_CX_IPEAK) += cx_ipeak.o
 obj-$(CONFIG_QCOM_AOP_DDR_MESSAGING) += aop_ddr_msgs.o
+# HTC_WIFI_START :Read Mac From mfg partition
+obj-$(CONFIG_HTC_WLAN_NV) += custom_platdev.o
+# HTC_WIFI_END :Read Mac From mfg partition
 obj-$(CONFIG_MSM_HAB) += hab/
 obj-$(CONFIG_QCOM_HYP_CORE_CTL) += hyp_core_ctl.o

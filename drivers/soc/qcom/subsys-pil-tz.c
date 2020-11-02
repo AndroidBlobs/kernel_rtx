@@ -25,6 +25,11 @@
 #include <linux/msm-bus.h>
 #include <linux/dma-mapping.h>
 
+/* HTC_AUD_START */
+#if defined(CONFIG_HTC_FEATURES_SSR)
+#include <linux/htc_flags.h>
+#endif
+/* HTC_AUD_END */
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/ramdump.h>
 #include <soc/qcom/scm.h>
@@ -33,6 +38,28 @@
 #include <linux/soc/qcom/smem_state.h>
 
 #include "peripheral-loader.h"
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+#include <linux/htc_flags.h>
+#endif
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+#include <linux/rtc.h>
+extern struct timezone sys_tz;
+static void PIL_Show_Time(void)
+{
+	struct timespec ts_rtc;
+	struct rtc_time tm;
+
+	//rtc
+	getnstimeofday(&ts_rtc);
+	rtc_time_to_tm(ts_rtc.tv_sec - (sys_tz.tz_minuteswest * 60), &tm);
+
+	pr_err("%s[%d]: %d-%02d-%02d %02d:%02d:%02d\n", __func__, __LINE__,
+		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+		tm.tm_min, tm.tm_sec);
+}
+#endif
 
 #define XO_FREQ			19200000
 #define PROXY_TIMEOUT_MS	10000
@@ -797,6 +824,10 @@ static struct pil_reset_ops pil_ops_trusted = {
 	.deinit_image = pil_deinit_image_trusted,
 };
 
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	static int htc_skip_ramdump = false;
+#endif
+
 static void log_failure_reason(const struct pil_tz_data *d)
 {
 	size_t size;
@@ -819,6 +850,37 @@ static void log_failure_reason(const struct pil_tz_data *d)
 
 	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+	if (!strncmp(d->subsys_desc.name, "modem", SUBSYS_NAME_MAX_LENGTH)) {
+		/* Modem_BSP show time for debug*/
+		PIL_Show_Time();
+		/* Modem_BSP show time for debug*/
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+		/* Modem_BSP Set dump mode as modem send specific words in SSR reason*/
+		if (get_radio_flag() & BIT(3)) { /* Only enable under Radio flag = 8 */
+			if (strstr(reason, "[htc_disable_ssr]") ||
+			strstr(reason, "SFR Init: wdog or kernel error suspected")) {
+				subsys_set_restart_level(d->subsys, RESET_SOC);
+				subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+				pr_err("%s: [pil] Modem request full dump.\n",
+					__func__);
+			} else if (strstr(reason, "[htc_skip_ramdump]")) {
+				htc_skip_ramdump = true;
+				subsys_set_restart_level(d->subsys, RESET_SUBSYS_COUPLED);
+				subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+				pr_info("%s: [pil] Modem request skip ramdump.\n",
+					__func__);
+			}
+		}
+		else {
+			pr_err("get_radio_flag = %d", get_radio_flag());
+		}
+#endif /* Modem_BSP Set dump mode as modem send specific words in SSR reason*/
+		subsys_set_restart_reason(d->subsys, reason);
+	}
+#endif
 }
 
 static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
@@ -853,6 +915,19 @@ static int subsys_powerup(const struct subsys_desc *subsys)
 		reinit_completion(&d->stop_ack);
 
 	d->desc.fw_name = subsys->fw_name;
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	if (!strncmp(d->subsys_desc.name, "modem", SUBSYS_NAME_MAX_LENGTH)) {
+		/* Modem_BSP Set dump mode as modem send specific words in SSR reason */
+		if (htc_skip_ramdump == true) {
+			htc_skip_ramdump = false;
+			subsys_config_modem_restart_level(d->subsys);
+			subsys_config_modem_enable_ramdump(d->subsys);
+			pr_info("%s: [pil] restore htc ramdump mode!!\n", __func__);
+		}
+	}
+#endif /* Modem_BSP Set dump mode as modem send specific words in SSR reason */
+
 	ret = pil_boot(&d->desc);
 
 	return ret;
@@ -1224,6 +1299,54 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		goto err_subsys;
 	}
 
+/* HTC_AUD_START */
+#if defined(CONFIG_HTC_FEATURES_SSR)
+    /*LPASS restart condition and ramdump rule would follow below
+    1.LPASS restart default enable
+    - flag [6] 0,   [8] 0 -> enable restart, no ramdump
+    - flag [6] 20,  [8] 0 -> reboot
+    - flag [6] 20,  [8] 8 -> disable restart, go DL mode
+    - flag [6] 0,   [8] 8 -> enable restart, online ramdump
+    2.LPASS restart default disable
+    - flag [6] 0,   [8] 0 -> reboot
+    - flag [6] 20,  [8] 0 -> enable restart, no ramdump
+    - flag [6] 20,  [8] 8 -> enable restart, online ramdump
+    - flag [6] 0,   [8] 8 -> disable restart, go DL mode
+    3. Always disable LPASS SSR if boot_mode != normal
+    */
+    if((!strcmp(d->desc.name, "adsp")) ||(!strcmp(d->desc.name, "cdsp"))) {
+#if defined(CONFIG_HTC_FEATURES_SSR_LPASS_ENABLE)
+        if (get_kernel_flag() & (KERNEL_FLAG_ENABLE_SSR_LPASS)) {
+            pr_info("%s: CONFIG_HTC_FEATURES_SSR_LPASS_ENABLE, KERNEL_FLAG_ENABLE_SSR_LPASS, RESET_SOC.\n", __func__);
+            subsys_set_restart_level(d->subsys, RESET_SOC);
+            subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+        } else {
+            pr_info("%s: CONFIG_HTC_FEATURES_SSR_LPASS_ENABLE, RESET_SUBSYS_COUPLED.\n", __func__);
+            subsys_set_restart_level(d->subsys, RESET_SUBSYS_COUPLED);
+#if 1
+            if (get_radio_flag() & BIT(3))
+                subsys_set_enable_ramdump(d->subsys, ENABLE_RAMDUMP);
+            else
+                subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+#endif
+        }
+#else
+        if (get_kernel_flag() & (KERNEL_FLAG_ENABLE_SSR_LPASS)) {
+            pr_info("%s: KERNEL_FLAG_ENABLE_SSR_LPASS, RESET_SUBSYS_COUPLED.\n", __func__);
+            subsys_set_restart_level(d->subsys, RESET_SUBSYS_COUPLED);
+            if (get_radio_flag() & BIT(3))
+                subsys_set_enable_ramdump(d->subsys, ENABLE_RAMDUMP);
+            else
+                subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+        } else {
+            pr_info("%s: RESET_SOC.\n", __func__);
+            subsys_set_restart_level(d->subsys, RESET_SOC);
+            subsys_set_enable_ramdump(d->subsys, DISABLE_RAMDUMP);
+        }
+#endif
+    }
+#endif
+/* HTC_AUD_END */
 	return 0;
 err_subsys:
 	destroy_ramdump_device(d->minidump_dev);

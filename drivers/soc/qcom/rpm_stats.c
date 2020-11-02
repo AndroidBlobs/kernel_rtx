@@ -63,6 +63,10 @@ struct msm_rpm_stats_data {
 
 };
 
+struct msm_aop_ss_state {
+	u32 info;
+};
+
 struct msm_rpmstats_kobj_attr {
 	struct kobject *kobj;
 	struct kobj_attribute ka;
@@ -125,6 +129,13 @@ static inline u32 msm_rpmstats_read_long_register(void __iomem *regbase,
 			index * sizeof(struct msm_rpm_stats_data));
 }
 
+static inline u32 msm_aop_ss_stats_read_long_register(void __iomem *regbase,
+		int index, int offset)
+{
+	return readl_relaxed(regbase + offset +
+			index * sizeof(struct msm_aop_ss_state));
+}
+
 static inline u64 msm_rpmstats_read_quad_register(void __iomem *regbase,
 		int index, int offset)
 {
@@ -173,6 +184,196 @@ static inline int msm_rpmstats_copy_stats(
 
 	return length;
 }
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+enum aop_sub_system_name_v1 {
+	APPS_SOC,
+	SP_SOC,
+	AUDIO_SOC,
+	SENSOR_SOC,
+	AOP_SOC,
+	DEBUG_SOC,
+	GPU_SOC,
+	DISPLAY_SOC,
+	COMPUTE_SOC,
+	MODEM_SOC,
+};
+
+struct aop_sub_system {
+	char	*name;
+};
+
+static struct aop_sub_system sm8150_v1_aop_ss[] = {
+	[APPS_SOC]	= {
+		.name	= "ap",
+	},
+	[SP_SOC]	= {
+		.name	= "sp",
+	},
+	[AUDIO_SOC]	= {
+		.name	= "aud",
+	},
+	[SENSOR_SOC]		= {
+		.name	= "ssc",
+	},
+	[AOP_SOC]		= {
+		.name	= "aop",
+	},
+	[DEBUG_SOC]	= {
+		.name	= "dbg",
+	},
+	[GPU_SOC]	= {
+		.name	= "gpu",
+	},
+	[DISPLAY_SOC]	= {
+		.name	= "disp",
+	},
+	[COMPUTE_SOC]	= {
+		.name	= "cdsp",
+	},
+	[MODEM_SOC]	= {
+		.name	= "mdm",
+	},
+};
+
+struct msm_rpmstats_platform_data *htc_pdata;
+
+struct htc_sleep_state_base {
+    void __iomem *system_state_base;
+	void __iomem *sleep_state_base;
+	void __iomem *sleep_state_cnt_base;
+};
+
+struct htc_sleep_state_base htc_base;
+
+#define SLEEP_STATS_BUF         1024
+#define SLEEP_STATS_PIECE       64
+
+/* In order to remap the ss_sleep_state pointer*/
+/* Below offset need to correspond to AOP code */
+/* i.e. aop_info_0_t structure in msg_ram_layout.h*/
+#define SLEEP_STATS 3
+#define AOP_DDR_REG_DATA 12
+#define REVERSED 199
+#define WDOG_COOKIE 4
+#define AOP_SUBSYSTEM_NUM 10
+#define SS_STATE_CHANGE_CNT_OFFSET 4
+#define SS_SLEEP_STATE_OFFSET (sizeof(struct msm_rpm_stats_data) * SLEEP_STATS) + WDOG_COOKIE + AOP_DDR_REG_DATA + (REVERSED * 4)
+
+int htc_show_aop_ss_sleep_state(char *buf, char *piece)
+{
+	struct msm_aop_ss_state sleep_state;
+	void __iomem *reg;
+	int index;
+
+	reg = htc_base.sleep_state_base;
+
+	if (!reg) {
+		pr_err("%s: ERROR could not ioremap start=%pa, len=%u\n",
+			__func__, &htc_pdata->phys_addr_base,
+			htc_pdata->phys_size);
+		return -ENOMEM;
+	}
+
+	sleep_state.info = msm_aop_ss_stats_read_long_register(reg, 0,
+			offsetof(struct msm_aop_ss_state, info));
+
+	snprintf(piece, SLEEP_STATS_PIECE, "(sleep_st, %X),", sleep_state.info);
+
+	if(strlen(buf) + strlen(piece) < SLEEP_STATS_BUF)
+		strncat(buf, piece, SLEEP_STATS_BUF - strlen(buf) - 1);
+
+	reg = htc_base.sleep_state_cnt_base;
+
+	if (!reg)
+		return -ENOMEM;
+
+
+	for (index = 0; index < AOP_SUBSYSTEM_NUM; index++) {
+		sleep_state.info = msm_aop_ss_stats_read_long_register(reg, index,
+                      offsetof(struct msm_aop_ss_state, info));
+
+		snprintf(piece, SLEEP_STATS_PIECE,
+				"(%s, %d),",
+				sm8150_v1_aop_ss[index].name, sleep_state.info);
+
+		if(strlen(buf) + strlen(piece) < SLEEP_STATS_BUF)
+			strncat(buf, piece, SLEEP_STATS_BUF - strlen(buf) - 1);
+	}
+
+	buf[strlen(buf) - 1] = '\0';
+	printk("[K] system_sleep_stats: %s\n", buf);
+
+	return 0;
+}
+
+int htc_show_system_stats(void)
+{
+    struct msm_rpm_stats_data data;
+    void __iomem *reg;
+    char stat_type[5];
+    u64 time_in_last_mode;
+    u64 time_since_last_mode;
+    u64 actual_last_sleep;
+    int i;
+    char buf[SLEEP_STATS_BUF];
+    char piece[SLEEP_STATS_PIECE];
+
+    if(!htc_pdata) {
+        pr_err("[K] msm_rpmstats_platform_data is NULL\n");
+        return -ENOMEM;
+    }
+
+    reg = htc_base.system_state_base;
+
+    if (!reg) {
+        pr_err("%s: ERROR could not ioremap base=%pa, size=%u\n",
+            __func__, &htc_pdata->phys_addr_base, htc_pdata->phys_size);
+        return -ENOMEM;
+    }
+
+    memset(buf, 0, SLEEP_STATS_BUF);
+    memset(piece, 0, SLEEP_STATS_PIECE);
+
+    for (i = 0; i < RPM_STATS_NUM_REC; i++) {
+        data.stat_type = msm_rpmstats_read_long_register(reg, i,
+               offsetof(struct msm_rpm_stats_data, stat_type));
+        data.count = msm_rpmstats_read_long_register(reg, i,
+               offsetof(struct msm_rpm_stats_data, count));
+        data.last_entered_at = msm_rpmstats_read_quad_register(reg,
+               i, offsetof(struct msm_rpm_stats_data, last_entered_at));
+        data.last_exited_at = msm_rpmstats_read_quad_register(reg,
+               i, offsetof(struct msm_rpm_stats_data, last_exited_at));
+        data.accumulated = msm_rpmstats_read_quad_register(reg,
+               i, offsetof(struct msm_rpm_stats_data, accumulated));
+
+        stat_type[4] = 0;
+        memcpy(stat_type, &data.stat_type, sizeof(u32));
+
+        time_in_last_mode = data.last_exited_at - data.last_entered_at;
+        time_in_last_mode = get_time_in_msec(time_in_last_mode);
+        time_since_last_mode = arch_counter_get_cntvct() - data.last_exited_at;
+        time_since_last_mode = get_time_in_sec(time_since_last_mode);
+        actual_last_sleep = get_time_in_msec(data.accumulated);
+
+        snprintf(piece, SLEEP_STATS_PIECE, "(%s, %d, %llu, %llu, %llu),",
+                stat_type, data.count, time_in_last_mode,
+                time_since_last_mode, actual_last_sleep);
+
+        if(strlen(buf) + strlen(piece) <= SLEEP_STATS_BUF)
+            strncat(buf, piece, sizeof(buf) - strlen(buf) - 1);
+        else {
+            pr_warn("[K] system_sleep_states's buffer was full...\n");
+            break;
+        }
+    }
+
+	htc_show_aop_ss_sleep_state(buf, piece);
+
+
+    return 0;
+}
+#endif
 
 static ssize_t rpmstats_show(struct kobject *kobj,
 			struct kobj_attribute *attr, char *buf)
@@ -278,6 +479,27 @@ static int msm_rpmstats_probe(struct platform_device *pdev)
 		pdata->num_records = RPM_STATS_NUM_REC;
 
 	msm_rpmstats_create_sysfs(pdev, pdata);
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+    htc_pdata = pdata;
+
+    htc_base.system_state_base = ioremap_nocache(
+                    htc_pdata->phys_addr_base,
+                    htc_pdata->phys_size);
+
+	htc_base.sleep_state_base = ioremap_nocache(
+			htc_pdata->phys_addr_base + SS_SLEEP_STATE_OFFSET,
+			htc_pdata->phys_size);
+
+	htc_base.sleep_state_cnt_base = ioremap_nocache(
+			htc_pdata->phys_addr_base + SS_SLEEP_STATE_OFFSET + SS_STATE_CHANGE_CNT_OFFSET,
+			htc_pdata->phys_size);
+
+    if (!htc_base.system_state_base||!htc_base.sleep_state_base||!htc_base.sleep_state_cnt_base) {
+        pr_err("%s: ERROR could not ioremap base=%pa, size=%u\n",
+            __func__, &htc_pdata->phys_addr_base, htc_pdata->phys_size);
+    }
+#endif
 
 	return 0;
 }

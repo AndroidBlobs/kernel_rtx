@@ -836,12 +836,21 @@ config QCOM_CX_IPEAK
 	  clients are going to cross their thresholds then Cx ipeak hw module will raise
 	  an interrupt to cDSP block to throttle cDSP fmax.
 
+# HTC_WIFI_START
+config HTC_WLAN_NV
+	bool "Read MAC and countryID from mfg partition"
+	default y
+	help
+	  Say Y here if you want the HTC WLAN NV features
+# HTC_WIFI_END
+
 config QCOM_AOP_DDR_MESSAGING
 	bool "Send messages to AOP about the DDR frequency during reboot"
 	help
 	  This driver sends messages to the AOP to adjust the DDR frequency when
 	  the device is rebooting, to ensure that the device is powered off
 	  cleanly.
+
 endmenu
 
 config QCOM_HYP_CORE_CTL
