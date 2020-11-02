@@ -643,6 +643,17 @@ struct ufs_stats {
 	struct ufshcd_req_stat req_stats[TS_NUM_STATS];
 	int query_stats_arr[UPIU_QUERY_OPCODE_MAX][MAX_QUERY_IDN];
 
+	unsigned long rbytes_drv;  /* Rd bytes UFS Host  */
+	unsigned long wbytes_drv;  /* Wr bytes UFS Host  */
+	unsigned long wbytes_low_perf;
+	unsigned long wtime_low_perf;
+	unsigned long lp_duration;	/* low performance duration */
+
+	struct ufshcd_req_stat last_req_stats[TS_NUM_STATS];
+	ktime_t last_req_ktime[TS_NUM_STATS];
+	struct delayed_work	stats_work;
+	struct workqueue_struct *workq;
+
 #endif
 	u32 last_intr_status;
 	ktime_t last_intr_ts;
@@ -1276,7 +1287,15 @@ static inline bool ufshcd_is_embedded_dev(struct ufs_hba *hba)
 #ifdef CONFIG_DEBUG_FS
 static inline void ufshcd_init_req_stats(struct ufs_hba *hba)
 {
-	memset(hba->ufs_stats.req_stats, 0, sizeof(hba->ufs_stats.req_stats));
+	memset(hba->ufs_stats.req_stats, 0, sizeof(struct ufshcd_req_stat)*TS_NUM_STATS);
+	memset(hba->ufs_stats.last_req_stats, 0, sizeof(struct ufshcd_req_stat)*TS_NUM_STATS);
+	memset(hba->ufs_stats.last_req_ktime, 0, sizeof(ktime_t));
+
+	hba->ufs_stats.rbytes_drv = 0;
+	hba->ufs_stats.wbytes_drv = 0;
+	hba->ufs_stats.lp_duration = 0;
+	hba->ufs_stats.wbytes_low_perf = 0;
+	hba->ufs_stats.wtime_low_perf = 0;
 }
 #else
 static inline void ufshcd_init_req_stats(struct ufs_hba *hba) {}
@@ -1551,5 +1570,13 @@ static inline void ufshcd_vops_pm_qos_req_end(struct ufs_hba *hba,
 	if (hba->var && hba->var->pm_qos_vops && hba->var->pm_qos_vops->req_end)
 		hba->var->pm_qos_vops->req_end(hba, req, lock);
 }
+
+#ifdef CONFIG_DEBUG_FS
+/* Get secure flag */
+extern unsigned int get_tamper_sf(void);
+/* definition of ufshcd statistic */
+#define UFSHCD_STATS_INTERVAL		5000	/* 5 secs */
+#define UFSHCD_STATS_LOG_INTERVAL		60000	/* 60 secs */
+#endif
 
 #endif /* End of Header */
