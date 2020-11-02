@@ -547,6 +547,11 @@ Optional properties:
 - qcom,dsi-dyn-clk-list:		An u32 array which lists all the supported dsi bit clock
 					frequencies in Hz for the given panel.
 
+- htc,brt-bl-table:             	An array that specifies the brightness and backlight bl mapping table.
+					Each set will have the format defined as below:
+					--> brightness level:[0,255]
+					--> bl level:(DDIC, PWM)[0,255] or (PMIC WLED)[0,4095]
+
 Required properties for sub-nodes:	None
 Optional properties:
 - qcom,dba-panel:	Indicates whether the current panel is used as a display bridge
