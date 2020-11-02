@@ -11,6 +11,9 @@ menuconfig INPUT_TOUCHSCREEN
 
 if INPUT_TOUCHSCREEN
 
+source "drivers/input/touchscreen/synaptics_dsx_htc/Kconfig"
+source "drivers/input/touchscreen/focaltech_htc/Kconfig"
+
 config TOUCHSCREEN_PROPERTIES
 	def_tristate INPUT
 	depends on INPUT
@@ -1246,6 +1249,18 @@ config TOUCHSCREEN_ROHM_BU21023
 	  To compile this driver as a module, choose M here: the
 	  module will be called bu21023_ts.
 
+config TOUCHSCREEN_USE_DSI_NOTIFY
+	bool "Use dsi notify"
+	default n
+	help
+	 Say Y here to enable dsi notify.
+
+config TOUCHSCREEN_USE_DRM_NOTIFY
+	bool "Use drm notify"
+	default n
+	help
+	  Say Y here to enable drm notify.
+
 config TOUCHSCREEN_ST
 	bool "STMicroelectronics Touchscreen Driver"
 	depends on I2C
@@ -1276,6 +1291,6 @@ config TOUCHSCREEN_SYNAPTICS_DSX
 
           If unsure, say N.
 
-source "drivers/input/touchscreen/synaptics_dsx/Kconfig"
+#source "drivers/input/touchscreen/synaptics_dsx/Kconfig"
 
 endif

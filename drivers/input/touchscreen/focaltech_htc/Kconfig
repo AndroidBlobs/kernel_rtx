@@ -1,0 +1,22 @@
+#
+# Focaltech Touchscreen driver configuration
+#
+
+config TOUCHSCREEN_FTS
+        bool "Focaltech Touchscreen"
+                depends on I2C
+                default y
+                help
+                  Say Y here if you have Focaltech touch panel.
+                  If unsure, say N.
+
+config TOUCHSCREEN_FTS_DIRECTORY
+    string "Focaltech ts directory name"
+    default "focaltech_touch"
+    depends on TOUCHSCREEN_FTS
+
+config TOUCHSCREEN_ROTATE_FTS_90_DEGREE
+        bool "When LCM be landscape, touch reports point should follow display to rotate 90 degree"
+        default n
+        help
+          Say Y here to enable LCM rotate 90 degree.
