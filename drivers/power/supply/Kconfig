@@ -610,6 +610,23 @@ config CHARGER_RT9455
 	help
 	  Say Y to enable support for Richtek RT9455 battery charger.
 
+config HTC_BATT
+	bool "htc default setting"
+	help
+	  For htc battery related common setting.
+
+config HTC_BATT_PCN0021
+	depends on HTC_BATT
+	bool "htc battery power statistic data for power monitoring"
+	help
+	  For htc battery related power statistic setting.
+
+config HTC_BATT_DCJACK
+	depends on HTC_BATT
+	bool "htc battery support 12V dcjack"
+	help
+	  htc battery support 12V dcjack.
+
 source "drivers/power/supply/qcom/Kconfig"
 
 endif # POWER_SUPPLY

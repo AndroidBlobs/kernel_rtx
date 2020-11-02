@@ -461,6 +461,7 @@ struct fg_dev {
 	struct delayed_work	profile_load_work;
 	struct work_struct	status_change_work;
 	struct delayed_work	sram_dump_work;
+	struct delayed_work	batt_temp_check_block_work;
 };
 
 /* Debugfs data structures are below */

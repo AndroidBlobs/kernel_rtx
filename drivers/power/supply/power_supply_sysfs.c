@@ -368,6 +368,18 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(pd_voltage_max),
 	POWER_SUPPLY_ATTR(pd_voltage_min),
 	POWER_SUPPLY_ATTR(sdp_current_max),
+#ifdef CONFIG_HTC_BATT
+	POWER_SUPPLY_ATTR(usb_conn_temp),
+	POWER_SUPPLY_ATTR(ext_otg_chg_control),
+#ifdef CONFIG_HTC_BATT_DCJACK
+	POWER_SUPPLY_ATTR(dcjack_removed_psy_changed_notifier_lock),
+	POWER_SUPPLY_ATTR(typec_mode_change_ignored),
+	POWER_SUPPLY_ATTR(nonecompliance_cable),
+	POWER_SUPPLY_ATTR(dcjack_disabled),
+	POWER_SUPPLY_ATTR(pd_in_non_compliance_hard_reset),
+	POWER_SUPPLY_ATTR(force_disable_dcjack),
+#endif //CONFIG_HTC_BATT_DCJACK
+#endif //CONFIG_HTC_BATT
 	POWER_SUPPLY_ATTR(connector_type),
 	POWER_SUPPLY_ATTR(parallel_batfet_mode),
 	POWER_SUPPLY_ATTR(parallel_fcc_max),
@@ -394,8 +406,6 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(chip_version),
 	POWER_SUPPLY_ATTR(qc_opti_disable),
 	POWER_SUPPLY_ATTR(therm_icl_limit),
-	POWER_SUPPLY_ATTR(voltage_max_limit),
-	POWER_SUPPLY_ATTR(dc_reset),
 	/* Charge pump properties */
 	POWER_SUPPLY_ATTR(cp_status1),
 	POWER_SUPPLY_ATTR(cp_status2),

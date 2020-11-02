@@ -179,6 +179,13 @@
 
 #define PARALLEL_ENABLE_VOTER			"PARALLEL_ENABLE_VOTER"
 
+#ifdef CONFIG_HTC_BATT
+#define VBUS_9V_THRESHOLD_UV	8000000
+#define VBUS_12V_THRESHOLD_UV	11000000
+#define VBUS_9V_FCC_COMP_UA	100000
+#define VBUS_12V_FCC_COMP_UA	200000
+#endif
+
 struct smb_chg_param {
 	const char	*name;
 	u16		reg;
@@ -256,6 +263,10 @@ struct smb1355 {
 	bool			disabled;
 
 	struct votable		*irq_disable_votable;
+#ifdef CONFIG_HTC_BATT
+	int			fcc_comp_ua;
+	struct power_supply	*usb_psy;
+#endif
 };
 
 enum {
@@ -596,6 +607,31 @@ static int smb1355_get_prop_health(struct smb1355 *chip, int type)
 	return POWER_SUPPLY_HEALTH_COOL;
 }
 
+#ifdef CONFIG_HTC_BATT
+int smb1355_get_vbus_volt(struct smb1355 *chip)
+{
+	union power_supply_propval pval = {0, };
+	int rc;
+
+	if (IS_ERR_OR_NULL(chip->usb_psy)) {
+		chip->usb_psy = power_supply_get_by_name("usb");
+	}
+
+	if (IS_ERR_OR_NULL(chip->usb_psy)) {
+		pr_err("usb_psy is not ready!");
+		return -ENODEV;
+	}
+
+	rc = power_supply_get_property(chip->usb_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &pval);
+	if (rc) {
+		pr_err("failed to retrieve value rc=%d\n", rc);
+		return -EINVAL;
+	}
+
+	return pval.intval;
+}
+#endif
+
 #define MIN_PARALLEL_ICL_UA		250000
 #define SUSPEND_CURRENT_UA		2000
 static int smb1355_parallel_get_prop(struct power_supply *psy,
@@ -647,6 +683,9 @@ static int smb1355_parallel_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 		rc = smb1355_get_charge_param(chip, &chip->param.fcc,
 						&val->intval);
+#ifdef CONFIG_HTC_BATT
+		val->intval -= chip->fcc_comp_ua;
+#endif
 		break;
 	case POWER_SUPPLY_PROP_MODEL_NAME:
 		val->strval = chip->name;
@@ -776,6 +815,13 @@ static int smb1355_set_parallel_charging(struct smb1355 *chip, bool disable)
 
 	chip->disabled = disable;
 
+#ifdef CONFIG_HTC_BATT
+	if (disable && chip->fcc_comp_ua != 0) {
+		pr_err("Adjust smb1355 FCC comp (%d->0) on pl_disabled\n", chip->fcc_comp_ua);
+		chip->fcc_comp_ua = 0;
+	}
+#endif
+
 	return 0;
 }
 
@@ -822,6 +868,10 @@ static int smb1355_parallel_set_prop(struct power_supply *psy,
 {
 	struct smb1355 *chip = power_supply_get_drvdata(psy);
 	int rc = 0;
+#ifdef CONFIG_HTC_BATT
+	int vbus;
+	int fcc_ua, fcc_comp_ua = 0;
+#endif
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
@@ -835,8 +885,32 @@ static int smb1355_parallel_set_prop(struct power_supply *psy,
 						val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
+#ifdef CONFIG_HTC_BATT
+		vbus = smb1355_get_vbus_volt(chip);
+		if (vbus > VBUS_12V_THRESHOLD_UV)
+			fcc_comp_ua = VBUS_12V_FCC_COMP_UA;
+		else if (vbus > VBUS_9V_THRESHOLD_UV)
+			fcc_comp_ua = VBUS_9V_FCC_COMP_UA;
+		else
+			fcc_comp_ua = 0;
+
+		if (val->intval + chip->fcc_comp_ua > v1_params.fcc.max_u)
+			fcc_comp_ua = 0;
+
+		fcc_ua = val->intval + fcc_comp_ua;
+
+		if (fcc_comp_ua != chip->fcc_comp_ua) {
+			pr_err("Adjust smb1355 FCC comp (%d->%d) on vbus=%d\n", chip->fcc_comp_ua, fcc_comp_ua, vbus);
+			chip->fcc_comp_ua = fcc_comp_ua;
+		}
+
+		rc = smb1355_set_charge_param(chip, &chip->param.fcc,
+						fcc_ua);
+#else
 		rc = smb1355_set_charge_param(chip, &chip->param.fcc,
 						val->intval);
+
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CONNECTOR_HEALTH:
 		chip->c_health = val->intval;
@@ -1399,6 +1473,10 @@ static int smb1355_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&chip->die_temp_work, die_temp_work);
 	chip->disabled = false;
 	chip->die_temp_deciDegC = -EINVAL;
+#ifdef CONFIG_HTC_BATT
+	chip->fcc_comp_ua = 0;
+	chip->usb_psy = NULL;
+#endif
 
 	chip->regmap = dev_get_regmap(chip->dev->parent, NULL);
 	if (!chip->regmap) {

@@ -48,6 +48,9 @@ enum {
 #define BATTERY_CHARGER_STATUS_2_REG		(CHGR_BASE + 0x07)
 #define CHARGER_ERROR_STATUS_BAT_OV_BIT		BIT(1)
 
+/* CHGR Interrupt Bits	 */
+#define CHGR_ERROR_RT_STS_BIT			BIT(0)
+
 #define BATTERY_CHARGER_STATUS_5_REG		(CHGR_BASE + 0x0B)
 #define ENABLE_TRICKLE_BIT			BIT(2)
 #define ENABLE_PRE_CHARGING_BIT			BIT(1)
@@ -85,11 +88,6 @@ enum {
 #define CHGR_NO_SAMPLE_TERM_RCHG_CFG_REG	(CHGR_BASE + 0x6B)
 #define NO_OF_SAMPLE_FOR_RCHG_SHIFT		2
 #define NO_OF_SAMPLE_FOR_RCHG			GENMASK(3, 2)
-
-#define CHGR_ADC_TERM_CFG_REG			(CHGR_BASE + 0x6C)
-#define TERM_BASED_ON_SYNC_CONV_OR_SAMPLE_CNT	BIT(0)
-#define TERM_BASED_ON_SYNC_CONV			0
-#define TERM_BASED_ON_SAMPLE_CNT		1
 
 #define CHGR_FLOAT_VOLTAGE_CFG_REG		(CHGR_BASE + 0x70)
 
@@ -154,10 +152,6 @@ enum {
 
 #define DCDC_OTG_CFG_REG			(DCDC_BASE + 0x53)
 #define OTG_EN_SRC_CFG_BIT			BIT(1)
-
-#define OTG_FAULT_CONDITION_CFG_REG		(DCDC_BASE + 0x56)
-#define USBIN_MID_COMP_FAULT_EN_BIT		BIT(5)
-#define USBIN_COLLAPSE_FAULT_EN_BIT		BIT(4)
 
 #define DCDC_CFG_REF_MAX_PSNS_REG		(DCDC_BASE + 0x8C)
 
@@ -239,6 +233,11 @@ enum {
 #define USBIN_UV_RT_STS_BIT			BIT(2)
 #define USBIN_VASHDN_RT_STS_BIT			BIT(1)
 #define USBIN_COLLAPSE_RT_STS_BIT		BIT(0)
+
+/* USBIN Latch Status Clear REG*/
+#define USB_INT_LATCHED_CLR_REG			(USBIN_BASE + 0x14)
+/* USBIN Latch Status REG*/
+#define USB_INT_LATCHED_STS_REG			(USBIN_BASE + 0x18)
 
 #define USBIN_CMD_IL_REG			(USBIN_BASE + 0x40)
 #define USBIN_SUSPEND_BIT			BIT(0)
@@ -329,12 +328,6 @@ enum {
 
 #define DCIN_CMD_IL_REG				(DCIN_BASE + 0x40)
 #define DCIN_SUSPEND_BIT			BIT(0)
-#define DCIN_EN_OVERRIDE_BIT			BIT(1)
-#define DCIN_EN_MASK				GENMASK(2, 1)
-
-#define DCIN_CMD_PON_REG			(DCIN_BASE + 0x45)
-#define DCIN_PON_BIT				BIT(0)
-#define MID_CHG_BIT					BIT(1)
 
 #define DCIN_LOAD_CFG_REG			(DCIN_BASE + 0x65)
 #define INPUT_MISS_POLL_EN_BIT			BIT(5)
@@ -373,6 +366,10 @@ enum {
 #define TYPEC_LEGACY_CABLE_STATUS_BIT		BIT(1)
 #define TYPEC_NONCOMP_LEGACY_CABLE_STATUS_BIT	BIT(0)
 
+#define TYPE_C_CC_STATUS                (TYPEC_BASE +0x0E)
+#define TYPEC_CC1_STATE                 GENMASK(7, 4)
+#define TYPEC_CC2_STATE                 GENMASK(3, 0)
+
 #define TYPEC_U_USB_STATUS_REG			(TYPEC_BASE + 0x0F)
 #define U_USB_GROUND_NOVBUS_BIT			BIT(6)
 #define U_USB_GROUND_BIT			BIT(4)
@@ -380,6 +377,11 @@ enum {
 #define U_USB_FLOAT1_BIT			BIT(2)
 #define U_USB_FMB2_BIT				BIT(1)
 #define U_USB_FLOAT2_BIT			BIT(0)
+
+/*TYPEC Interupt Latch Clear Register*/
+#define TYPEC_INT_LATCHED_CLR_REG		(TYPEC_BASE + 0x14)
+/*TYPEC Interupt Latch Status Register*/
+#define TYPEC_INT_LATCHED_STS_REG		(TYPEC_BASE + 0x18)
 
 #define TYPE_C_MODE_CFG_REG			(TYPEC_BASE + 0x44)
 #define TYPEC_TRY_MODE_MASK			GENMASK(4, 3)

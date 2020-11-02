@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 subdir-ccflags-$(CONFIG_POWER_SUPPLY_DEBUG) := -DDEBUG
+subdir-ccflags-$(CONFIG_HTC_BATT) += -DAPPLY_HTC_POWER_SUPPLY=1 -DAPPLY_HTC_KERNEL_FLAG=1 -DAPPLY_HTC_BOOTMODE=1
 
 power_supply-y				:= power_supply_core.o
 power_supply-$(CONFIG_SYSFS)		+= power_supply_sysfs.o
@@ -82,4 +83,5 @@ obj-$(CONFIG_CHARGER_TPS65090)	+= tps65090-charger.o
 obj-$(CONFIG_CHARGER_TPS65217)	+= tps65217_charger.o
 obj-$(CONFIG_AXP288_FUEL_GAUGE) += axp288_fuel_gauge.o
 obj-$(CONFIG_AXP288_CHARGER)	+= axp288_charger.o
+obj-$(CONFIG_HTC_BATT)          += htc_battery.o htc_battery_smb5.o
 obj-$(CONFIG_ARCH_QCOM)		+= qcom/
