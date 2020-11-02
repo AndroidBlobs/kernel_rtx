@@ -553,6 +553,12 @@ config QPNP_MISC
 	  and the driver provides an API to check if this interrupt
 	  is available on the current PMIC chip.
 
+config SENSORS_MAX31760
+	tristate "FAN Support for MAX31760 driver chip"
+	depends on I2C
+	help
+	  If you say yes here you get support for MAX31760 FAN test driver.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
