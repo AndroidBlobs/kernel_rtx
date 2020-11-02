@@ -1,0 +1,12 @@
+config SND_SOC_TAS2557_STEREO
+	tristate
+	default y
+config TAS2557_REGMAP_STEREO
+	tristate
+	default y
+config TAS2557_CODEC_STEREO
+	tristate
+	default y
+config TAS2557_MISC_STEREO
+	tristate
+	default y
