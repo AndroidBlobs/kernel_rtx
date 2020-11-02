@@ -145,10 +145,17 @@ core-$(CONFIG_CRYPTO) += arch/arm64/crypto/
 libs-y		:= arch/arm64/lib/ $(libs-y)
 core-$(CONFIG_EFI_STUB) += $(objtree)/drivers/firmware/efi/libstub/lib.a
 
+suffix_$(CONFIG_KERNEL_GZIP) = gz
+suffix_$(CONFIG_KERNEL_LZ4)  = lz4
+
 ifeq ($(CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP),y)
 KBUILD_IMAGE   := Image.gz
 else
 KBUILD_IMAGE   := Image
+endif
+
+ifeq ($(CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_LZ4),y)
+KBUILD_IMAGE   := Image.lz4
 endif
 
 # Default target when executing plain make
@@ -156,6 +163,9 @@ boot		:= arch/arm64/boot
 ifeq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
 KBUILD_TARGET  := $(addsuffix -dtb,$(KBUILD_IMAGE))
 KBUILD_IMAGE	:= $(boot)/$(addsuffix -dtb,$(KBUILD_IMAGE))
+else
+KBUILD_IMAGE	:= $(boot)/Image.$(suffix_y)
+KBUILD_TARGET  := Image.$(suffix_y)
 endif
 
 KBUILD_DTBS	:= dtbs
@@ -186,7 +196,7 @@ dtbs: prepare scripts
 dtbs_install:
 	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts
 
-Image-dtb: vmlinux scripts dtbs
+Image-dtb Image.lz4-dtb: vmlinux scripts dtbs
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
 Image.gz-dtb: vmlinux scripts dtbs Image.gz
@@ -213,6 +223,7 @@ vdso_prepare: prepare0
 
 define archhelp
   echo  '* Image.gz      - Compressed kernel image (arch/$(ARCH)/boot/Image.gz)'
+  echo  '* Image.lz4      - Compressed kernel image (arch/$(ARCH)/boot/Image.lz4)'
   echo  '  Image         - Uncompressed kernel image (arch/$(ARCH)/boot/Image)'
   echo  '* dtbs          - Build device tree blobs for enabled boards'
   echo  '  dtbs_install  - Install dtbs to $(INSTALL_DTBS_PATH)'

@@ -36,6 +36,10 @@
 #include <asm/tlbflush.h>
 #include <linux/msm_rtb.h>
 
+#if defined(CONFIG_HTC_DEBUG_RTB)
+#include <linux/htc_debug_tools.h>
+#endif
+
 static inline void contextidr_thread_switch(struct task_struct *next)
 {
 	pid_t pid = task_pid_nr(next);
@@ -46,8 +50,11 @@ static inline void contextidr_thread_switch(struct task_struct *next)
 	write_sysreg(pid, contextidr_el1);
 	isb();
 
+#if defined(CONFIG_HTC_DEBUG_RTB)
+	uncached_logk_pc(LOGK_CTXID, (void *)(uintptr_t)htc_debug_get_sched_clock_ms(), (void *)(uintptr_t)pid);
+#else
 	uncached_logk(LOGK_CTXID, (void *)(u64)pid);
-
+#endif
 }
 
 /*

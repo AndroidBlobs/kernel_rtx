@@ -49,6 +49,8 @@ config ARM64
 	select ARCH_HAS_UBSAN_SANITIZE_ALL
 	select ARM_AMBA
 	select ARM_ARCH_TIMER
+	select HAVE_KERNEL_GZIP
+	select HAVE_KERNEL_LZ4
 	select ARM_GIC
 	select AUDIT_ARCH_COMPAT_GENERIC
 	select ARM_GIC_V2M if PCI
@@ -719,6 +721,13 @@ config SCHED_SMT
 	  MultiThreading at a cost of slightly increased overhead in some
 	  places. If unsure say N here.
 
+config HTC_POWER_DEBUG
+	bool "Support htc power debug feature"
+	help
+	  Use this to enable htc power debug feature including pm statistics,
+	  clock/gpio/qpnp pin dump, wakeup source, kerenl top and autosuspend
+	  stage footprint
+
 config NR_CPUS
 	int "Maximum number of CPUs (2-4096)"
 	range 2 4096
@@ -1321,6 +1330,8 @@ choice
 
 	config IMG_GZ_DTB
 		bool "Image.gz-dtb"
+	config IMG_LZ4_DTB
+		bool "Image.lz4-dtb"
 	config IMG_DTB
 		bool "Image-dtb"
 endchoice
@@ -1329,6 +1340,7 @@ config BUILD_ARM64_APPENDED_KERNEL_IMAGE_NAME
 	string
 	depends on BUILD_ARM64_APPENDED_DTB_IMAGE
 	default "Image.gz-dtb" if IMG_GZ_DTB
+	default "Image.lz4-dtb" if IMG_LZ4_DTB
 	default "Image-dtb" if IMG_DTB
 
 config BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES
@@ -1340,10 +1352,10 @@ config BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES
 
 choice
 	prompt "Kernel compression method"
-	default BUILD_ARM64_KERNEL_COMPRESSION_GZIP
+	default BUILD_ARM64_KERNEL_COMPRESSION_LZ4
 	help
-	  Allows choice between gzip compressed or uncompressed
-	  kernel image
+	  Allows choice between lz4 or gzip compressed or
+	  uncompressed kernel image
 
 config BUILD_ARM64_KERNEL_COMPRESSION_GZIP
 	bool "Build compressed kernel image"
@@ -1352,6 +1364,12 @@ config BUILD_ARM64_KERNEL_COMPRESSION_GZIP
 	  compression with concatenated dtb.
 	  gzip is based on the DEFLATE
 	  algorithm.
+
+config BUILD_ARM64_KERNEL_COMPRESSION_LZ4
+	bool "Build compressed kernel image"
+	help
+	  Build a kernel image using lz4
+	  compression with concatenated dtb.
 
 config BUILD_ARM64_UNCOMPRESSED_KERNEL
 	bool "Build uncompressed kernel image"
@@ -1455,3 +1473,5 @@ source "arch/arm64/crypto/Kconfig"
 endif
 
 source "lib/Kconfig"
+
+source "arch/arm64/Kconfig.htc"

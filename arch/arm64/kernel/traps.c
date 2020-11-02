@@ -62,7 +62,7 @@ int show_unhandled_signals = 0;
 
 static void dump_backtrace_entry(unsigned long where)
 {
-	printk(" %pS\n", (void *)where);
+	printk("[<%p>] %pS\n", (void *) where, (void *) where);
 }
 
 static void __dump_instr(const char *lvl, struct pt_regs *regs)
@@ -102,9 +102,6 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 {
 	struct stackframe frame;
 	int skip;
-	long cur_state = 0;
-	unsigned long cur_sp = 0;
-	unsigned long cur_fp = 0;
 
 	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 
@@ -123,9 +120,6 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 		 */
 		frame.fp = thread_saved_fp(tsk);
 		frame.pc = thread_saved_pc(tsk);
-		cur_state = tsk->state;
-		cur_sp = thread_saved_sp(tsk);
-		cur_fp = frame.fp;
 	}
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	frame.graph = tsk->curr_ret_stack;
@@ -134,23 +128,6 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 	skip = !!regs;
 	printk("Call trace:\n");
 	do {
-		if (tsk != current && (cur_state != tsk->state
-			/*
-			 * We would not be printing backtrace for the task
-			 * that has changed state from uninterruptible to
-			 * running before hitting the do-while loop but after
-			 * saving the current state. If task is in running
-			 * state before saving the state, then we may print
-			 * wrong call trace or end up in infinite while loop
-			 * if *(fp) and *(fp+8) are same. While the situation
-			 * will stop print when that task schedule out.
-			 */
-			|| cur_sp != thread_saved_sp(tsk)
-			|| cur_fp != thread_saved_fp(tsk))) {
-			printk("The task:%s had been rescheduled!\n",
-				tsk->comm);
-			break;
-		}
 		/* skip until specified stack frame */
 		if (!skip) {
 			dump_backtrace_entry(frame.pc);
@@ -221,6 +198,11 @@ void die(const char *str, struct pt_regs *regs, int err)
 	int ret;
 	unsigned long flags;
 
+#if defined(CONFIG_HTC_DEBUG_KP)
+	char sym_pc[KSYM_SYMBOL_LEN];
+	char sym_lr[KSYM_SYMBOL_LEN];
+	struct task_struct *tsk = current;
+#endif
 	raw_spin_lock_irqsave(&die_lock, flags);
 
 	oops_enter();
@@ -236,10 +218,23 @@ void die(const char *str, struct pt_regs *regs, int err)
 	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
 	oops_exit();
 
+#if defined(CONFIG_HTC_DEBUG_KP)
+	sprint_symbol(sym_pc, regs->pc);
+	sprint_symbol(sym_lr, (compat_user_mode(regs))? regs->compat_lr:regs->regs[30]);
+#endif
+
 	if (in_interrupt())
+#if defined(CONFIG_HTC_DEBUG_KP)
+		panic("%.*s PC:%s LR:%s", TASK_COMM_LEN, tsk->comm, sym_pc, sym_lr);
+#else
 		panic("Fatal exception in interrupt");
+#endif
 	if (panic_on_oops)
+#if defined(CONFIG_HTC_DEBUG_KP)
+		panic("%.*s PC:%s LR:%s", TASK_COMM_LEN, tsk->comm, sym_pc, sym_lr);
+#else
 		panic("Fatal exception");
+#endif
 
 	raw_spin_unlock_irqrestore(&die_lock, flags);
 
