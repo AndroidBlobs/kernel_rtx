@@ -841,6 +841,10 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 }
 EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+static bool HTC_DEBUG_LAST_ACTIVE_WAKEUP_SOURCE = false;
+#endif
+
 void pm_print_active_wakeup_sources(void)
 {
 	struct wakeup_source *ws;
@@ -850,7 +854,12 @@ void pm_print_active_wakeup_sources(void)
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
+#ifdef CONFIG_HTC_POWER_DEBUG
+            if(HTC_DEBUG_LAST_ACTIVE_WAKEUP_SOURCE)
+                pr_info("active wakeup source: %s\n", ws->name);
+#else
 			pr_debug("active wakeup source: %s\n", ws->name);
+#endif
 			active = 1;
 		} else if (!active &&
 			   (!last_activity_ws ||
@@ -861,8 +870,15 @@ void pm_print_active_wakeup_sources(void)
 	}
 
 	if (!active && last_activity_ws)
+#ifdef CONFIG_HTC_POWER_DEBUG
+        if(HTC_DEBUG_LAST_ACTIVE_WAKEUP_SOURCE)
+            pr_info("last active wakeup source: %s\n",
+                last_activity_ws->name);
+#else
 		pr_debug("last active wakeup source: %s\n",
 			last_activity_ws->name);
+#endif
+
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_print_active_wakeup_sources);
@@ -892,7 +908,13 @@ bool pm_wakeup_pending(void)
 
 	if (ret) {
 		pr_info("PM: Wakeup pending, aborting suspend\n");
+#ifdef CONFIG_HTC_POWER_DEBUG
+		HTC_DEBUG_LAST_ACTIVE_WAKEUP_SOURCE = true;
 		pm_print_active_wakeup_sources();
+		HTC_DEBUG_LAST_ACTIVE_WAKEUP_SOURCE = false;
+#else
+		pm_print_active_wakeup_sources();
+#endif
 	}
 
 	return ret || atomic_read(&pm_abort_suspend) > 0;
@@ -930,9 +952,15 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 			else if (desc->action && desc->action->name)
 				name = desc->action->name;
 
-			pr_warn("%s: %d triggered %s\n", __func__,
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+			pr_warn("[WAKEUP] %s: %d triggered %s\n", __func__,
 					irq_number, name);
 
+#else
+			pr_warn("%s: %d triggered %s\n", __func__,
+					irq_number, name);
+#endif
 		}
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
@@ -1079,6 +1107,40 @@ static int print_wakeup_source_stats(struct seq_file *m,
 
 	return 0;
 }
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+void htc_print_wakeup_source(struct wakeup_source *ws)
+{
+    if (ws->active) {
+        if (ws->timer_expires) {
+            long timeout = ws->timer_expires - jiffies;
+            if (timeout > 0) {
+                if(ws->name)
+                    printk(KERN_CONT " '%s', time left %ld ticks; ", ws->name, timeout);
+                else
+                    printk(KERN_CONT "'null', time left %ld ticks; ", timeout);
+            }
+        } else {
+            if(ws->name)
+                printk(KERN_CONT " '%s' ", ws->name);
+            else
+                printk(KERN_CONT " 'null' ");
+        }
+    }
+}
+
+void htc_print_active_wakeup_sources(void)
+{
+    struct wakeup_source *ws;
+
+    printk("wakeup sources: ");
+    rcu_read_lock();
+    list_for_each_entry_rcu(ws, &wakeup_sources, entry)
+            htc_print_wakeup_source(ws);
+    rcu_read_unlock();
+    printk(KERN_CONT "\n");
+}
+#endif
 
 /**
  * wakeup_sources_stats_show - Print wakeup sources statistics information.
