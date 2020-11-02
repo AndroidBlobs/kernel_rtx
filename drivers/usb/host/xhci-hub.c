@@ -32,6 +32,11 @@
 #define	PORT_RWC_BITS	(PORT_CSC | PORT_PEC | PORT_WRC | PORT_OCC | \
 			 PORT_RC | PORT_PLC | PORT_PE)
 
+/* Reset secondary usb port
+ */
+#define XHCI_SUSPEND_RETRY_TIMES 1000
+extern void htc_reconnect_secondary_port(void);
+
 /* USB 3 BOS descriptor and a capability descriptors, combined.
  * Fields will be adjusted and added later in xhci_create_usb3_bos_desc()
  */
@@ -1648,6 +1653,18 @@ int xhci_bus_suspend(struct usb_hcd *hcd)
 		    bus_state->port_remote_wakeup) {	/* USB3 */
 			spin_unlock_irqrestore(&xhci->lock, flags);
 			xhci_dbg(xhci, "suspend failed because a port is resuming\n");
+			/* Reset secondary port when resuming fail over 1000 times */
+			if (xhci->core_id == 1) {
+				if (!xhci->is_reseted) {
+					if (xhci->retrycnt == XHCI_SUSPEND_RETRY_TIMES) {
+						htc_reconnect_secondary_port();
+						xhci->is_reseted = true;
+						xhci->retrycnt = 0;
+					} else
+						xhci->retrycnt++;
+				}
+			}
+
 			return -EBUSY;
 		}
 	}
@@ -1824,7 +1841,7 @@ int xhci_bus_resume(struct usb_hcd *hcd)
 
 	/* poll for U0 link state complete, both USB2 and USB3 */
 	for_each_set_bit(port_index, &bus_state->bus_suspended, BITS_PER_LONG) {
-		sret = xhci_handshake(port_array[port_index], PORT_PLC,
+		sret = xhci_handshake(xhci, port_array[port_index], PORT_PLC,
 				      PORT_PLC, 10 * 1000);
 		if (sret) {
 			xhci_warn(xhci, "port %d resume PLC timeout\n",

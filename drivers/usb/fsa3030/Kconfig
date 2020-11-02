@@ -1,0 +1,6 @@
+#
+# USB Switch FSA3030 driver configuration
+#
+config USB_SWITCH_FSA3030
+    bool "USB_SWITCH_FSA3030"
+    default n

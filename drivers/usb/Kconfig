@@ -91,6 +91,7 @@ config USB_PCI
 
 	  When say N here it will not build PCI related code in USB driver.
 
+
 if USB
 
 source "drivers/usb/core/Kconfig"
@@ -173,6 +174,8 @@ source "drivers/usb/gadget/Kconfig"
 source "drivers/usb/typec/Kconfig"
 
 source "drivers/usb/pd/Kconfig"
+
+source "drivers/usb/fsa3030/Kconfig"
 
 config USB_LED_TRIG
 	bool "USB LED Triggers"

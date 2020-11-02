@@ -247,6 +247,9 @@ config USB_F_GSI
 config USB_F_QDSS
 	tristate
 
+config USB_F_CHARGER
+    tristate
+
 # this first set of drivers all depend on bulk-capable hardware.
 
 config USB_CONFIGFS
@@ -604,6 +607,12 @@ config USB_CONFIGFS_F_QDSS
 	depends on USB_CONFIGFS
 	help
 	  USB QDSS function driver to get hwtracing related data over USB.
+config USB_CONFIGFS_F_CHARGER
+   bool "USB charger function"
+   select USB_F_CHARGER
+   depends on USB_CONFIGFS
+   help
+     USB Charger Funcion driver to support charging over USB
 
 choice
 	tristate "USB Gadget precomposed configurations"

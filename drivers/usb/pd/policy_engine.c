@@ -28,6 +28,9 @@
 #include <linux/usb/class-dual-role.h>
 #include <linux/usb/usbpd.h>
 #include "usbpd.h"
+#ifdef CONFIG_HTC_BATT_DCJACK
+#include <linux/power/htc_battery_smb5.h>
+#endif
 
 enum usbpd_state {
 	PE_UNKNOWN,
@@ -198,6 +201,8 @@ enum vdm_state {
 	MODE_EXITED,
 };
 
+extern void htc_set_usbmode(bool);
+
 static void *usbpd_ipc_log;
 #define usbpd_dbg(dev, fmt, ...) do { \
 	ipc_log_string(usbpd_ipc_log, "%s: %s: " fmt, dev_name(dev), __func__, \
@@ -353,7 +358,11 @@ static void *usbpd_ipc_log;
 #define ID_HDR_PRODUCT_AMA	5
 #define ID_HDR_PRODUCT_VPD	6
 
+#ifdef CONFIG_HTC_BATT_DCJACK
+static bool check_vsafe0v = false;
+#else
 static bool check_vsafe0v = true;
+#endif
 module_param(check_vsafe0v, bool, 0600);
 
 static int min_sink_current = 900;
@@ -444,6 +453,8 @@ struct usbpd {
 	bool			send_pr_swap;
 	bool			send_dr_swap;
 
+	bool			typec_enable;
+
 	struct regulator	*vbus;
 	struct regulator	*vconn;
 	bool			vbus_enabled;
@@ -483,6 +494,11 @@ struct usbpd {
 	u8			get_battery_status_db;
 	bool			send_get_battery_status;
 	u32			battery_sts_dobj;
+#ifdef  CONFIG_HTC_BATT_DCJACK
+	struct hrtimer		vdm_timer;
+	bool			non_compliance_hard_reset;
+#endif
+
 };
 
 static LIST_HEAD(_usbpd);	/* useful for debugging */
@@ -494,18 +510,38 @@ static const unsigned int usbpd_extcon_cable[] = {
 	EXTCON_NONE,
 };
 
+static struct usbpd* gpd = NULL;
+
 static void handle_vdm_tx(struct usbpd *pd, enum pd_sop_type sop_type);
 
 enum plug_orientation usbpd_get_plug_orientation(struct usbpd *pd)
 {
 	int ret;
 	union power_supply_propval val;
-
+#ifdef CONFIG_HTC_BATT_DCJACK
+	union power_supply_propval val2;
+	struct htc_batt_smb5_detect_data detect_data;
+#endif
 	ret = power_supply_get_property(pd->usb_psy,
 		POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION, &val);
 	if (ret)
 		return ORIENTATION_NONE;
+#ifdef CONFIG_HTC_BATT_DCJACK
+	ret = power_supply_get_property(pd->usb_psy,
+		POWER_SUPPLY_PROP_REAL_TYPE, &val2);
+	if (ret)
+		return ORIENTATION_NONE;
 
+	if (val2.intval == POWER_SUPPLY_TYPE_DCJACK){
+		ret = htc_battery_smb5_get_detect_data(&detect_data);
+		if (ret) {
+			usbpd_err(&pd->dev, "Unable to read store data with DCJACK disabled stage: %d\n",
+					ret);
+			return ret;
+		}
+		val.intval = detect_data.cc_ori;
+	}
+#endif
 	return val.intval;
 }
 EXPORT_SYMBOL(usbpd_get_plug_orientation);
@@ -548,6 +584,7 @@ static inline void start_usb_host(struct usbpd *pd, bool ss)
 
 static inline void stop_usb_peripheral(struct usbpd *pd)
 {
+	htc_set_usbmode(false);
 	extcon_set_state_sync(pd->extcon, EXTCON_USB, 0);
 }
 
@@ -556,6 +593,7 @@ static inline void start_usb_peripheral(struct usbpd *pd)
 	enum plug_orientation cc = usbpd_get_plug_orientation(pd);
 	union extcon_property_value val;
 
+	htc_set_usbmode(true);
 	val.intval = (cc == ORIENTATION_CC2);
 	extcon_set_property(pd->extcon, EXTCON_USB,
 			EXTCON_PROP_USB_TYPEC_POLARITY, val);
@@ -697,6 +735,7 @@ static int pd_send_msg(struct usbpd *pd, u8 msg_type, const u32 *data,
 	unsigned long flags;
 	int ret;
 	u16 hdr;
+
 
 	if (pd->hard_reset_recvd)
 		return -EBUSY;
@@ -848,6 +887,11 @@ static int pd_eval_src_caps(struct usbpd *pd)
 	bool pps_found = false;
 	u32 first_pdo = pd->received_pdos[0];
 
+	int sel_index = 0;
+	u32 pdo;
+	u32 pdo_vol = 0, pdo_curr = 0, sel_vol = 0, sel_curr = 0;
+	u64 pdo_watt = 0, max_watt = 0;
+
 	if (PD_SRC_PDO_TYPE(first_pdo) != PD_SRC_PDO_TYPE_FIXED) {
 		usbpd_err(&pd->dev, "First src_cap invalid! %08x\n", first_pdo);
 		return -EINVAL;
@@ -879,12 +923,35 @@ static int pd_eval_src_caps(struct usbpd *pd)
 	power_supply_set_property(pd->usb_psy,
 			POWER_SUPPLY_PROP_PD_ACTIVE, &val);
 
+	for (i = 0; i < ARRAY_SIZE(pd->received_pdos); i++){
+		pdo = pd->received_pdos[i];
+		if (pdo == 0)
+			break;
+		if (PD_SRC_PDO_TYPE(pdo) == PD_SRC_PDO_TYPE_FIXED){
+			pdo_vol = PD_SRC_PDO_FIXED_VOLTAGE(pdo) * 50;
+			if (pdo_vol > 9000)
+				break;
+
+			pdo_curr = PD_SRC_PDO_FIXED_MAX_CURR(pdo) *10;
+			pdo_watt = pdo_vol * pdo_curr;
+
+			if (pdo_watt >= max_watt){
+				max_watt = pdo_watt;
+				sel_index = i;
+				sel_vol = pdo_vol;
+				sel_curr = pdo_curr;
+			}
+		}
+	}
+
+	usbpd_info(&pd->dev, "show the capability: vol:%d, curr:%d, pps found:%d\n", sel_vol, sel_curr, pps_found);
 	/* First time connecting to a PD source and it supports USB data */
 	if (pd->peer_usb_comm && pd->current_dr == DR_UFP && !pd->pd_connected)
 		start_usb_peripheral(pd);
 
 	/* Select the first PDO (vSafe5V) immediately. */
-	pd_select_pdo(pd, 1, 0, 0);
+	/* Revised by HTC. Select the voltage is below than 9V which has the max power at first*/
+	pd_select_pdo(pd, sel_index+1, 0, 0);
 
 	return 0;
 }
@@ -1183,6 +1250,23 @@ static void phy_shutdown(struct usbpd *pd)
 	}
 }
 
+#ifdef CONFIG_HTC_BATT_DCJACK
+static enum hrtimer_restart vdm_timeout(struct hrtimer *timer)
+{
+	struct usbpd *pd = container_of(timer, struct usbpd, vdm_timer);
+
+	if (!pd->vdm_tx_retry)
+		goto exit;
+
+	pd->vdm_tx = pd->vdm_tx_retry;
+	pd->vdm_tx_retry = NULL;
+	queue_work(pd->wq, &pd->sm_work);
+
+exit:
+	return HRTIMER_NORESTART;
+}
+#endif
+
 static enum hrtimer_restart pd_timeout(struct hrtimer *timer)
 {
 	struct usbpd *pd = container_of(timer, struct usbpd, timer);
@@ -1317,6 +1401,9 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 	union power_supply_propval val = {0};
 	unsigned long flags;
 	int ret;
+#ifdef CONFIG_HTC_BATT_DCJACK
+	struct htc_batt_smb5_detect_data detect_data;
+#endif
 
 	if (pd->hard_reset_recvd) /* let usbpd_sm handle it */
 		return;
@@ -1332,6 +1419,10 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 		pd->in_pr_swap = false;
 		pd->current_pr = PR_NONE;
 		set_power_role(pd, PR_NONE);
+#ifdef CONFIG_HTC_BATT_DCJACK
+		val.intval = 0;
+		power_supply_get_property(pd->usb_psy, POWER_SUPPLY_PROP_TYPEC_MODE_CHANGE_IGNORED, &val);
+#endif
 		pd->typec_mode = POWER_SUPPLY_TYPEC_NONE;
 		kick_sm(pd, 0);
 		break;
@@ -1499,9 +1590,6 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 				!pd->in_explicit_contract)
 			stop_usb_host(pd);
 
-		if (!pd->in_explicit_contract)
-			dual_role_instance_changed(pd->dual_role);
-
 		pd->in_explicit_contract = true;
 
 		if (pd->vdm_tx && !pd->sm_queued)
@@ -1515,6 +1603,7 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 
 		kobject_uevent(&pd->dev.kobj, KOBJ_CHANGE);
 		complete(&pd->is_ready);
+		dual_role_instance_changed(pd->dual_role);
 		break;
 
 	case PE_PRS_SRC_SNK_TRANSITION_TO_OFF:
@@ -1593,6 +1682,13 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 					POWER_SUPPLY_PROP_REAL_TYPE, &val);
 			if (!ret) {
 				usbpd_dbg(&pd->dev, "type:%d\n", val.intval);
+
+#ifdef CONFIG_HTC_BATT_DCJACK
+				if (val.intval == POWER_SUPPLY_TYPE_DCJACK){
+					ret = htc_battery_smb5_get_detect_data(&detect_data);
+					val.intval = htc_battery_smb5_map_apsd_type2ps_type(detect_data.apsd_type);
+				}
+#endif
 				if (val.intval == POWER_SUPPLY_TYPE_USB ||
 					val.intval == POWER_SUPPLY_TYPE_USB_CDP)
 					start_usb_peripheral(pd);
@@ -1689,9 +1785,6 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 		break;
 
 	case PE_SNK_READY:
-		if (!pd->in_explicit_contract)
-			dual_role_instance_changed(pd->dual_role);
-
 		pd->in_explicit_contract = true;
 
 		if (pd->vdm_tx)
@@ -1703,6 +1796,7 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 
 		kobject_uevent(&pd->dev.kobj, KOBJ_CHANGE);
 		complete(&pd->is_ready);
+		dual_role_instance_changed(pd->dual_role);
 		break;
 
 	case PE_SNK_TRANSITION_TO_DEFAULT:
@@ -1802,6 +1896,17 @@ void usbpd_unregister_svid(struct usbpd *pd, struct usbpd_svid_handler *hdlr)
 }
 EXPORT_SYMBOL(usbpd_unregister_svid);
 
+void htc_typec_enable(bool enable)
+{
+	struct usbpd *pd = gpd;
+	if (!pd)
+		return;
+	pd->typec_enable = enable;
+	usbpd_set_state(pd, PE_ERROR_RECOVERY);
+	return;
+}
+EXPORT_SYMBOL(htc_typec_enable);
+
 int usbpd_send_vdm(struct usbpd *pd, u32 vdm_hdr, const u32 *vdos, int num_vdos)
 {
 	struct vdm_tx *vdm_tx;
@@ -1855,6 +1960,20 @@ void usbpd_vdm_in_suspend(struct usbpd *pd, bool in_suspend)
 	pd->vdm_in_suspend = in_suspend;
 }
 EXPORT_SYMBOL(usbpd_vdm_in_suspend);
+
+int htc_pd_get_usb_state(void)
+{
+	struct usbpd *pd = gpd;
+	int state = 0;
+
+	if (!pd)
+		return 0;
+
+	state = extcon_get_state(pd->extcon, EXTCON_USB);
+
+	return state;
+}
+EXPORT_SYMBOL(htc_pd_get_usb_state);
 
 static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 {
@@ -1952,6 +2071,9 @@ static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 
 		switch (cmd) {
 		case USBPD_SVDM_DISCOVER_IDENTITY:
+#ifdef CONFIG_HTC_BATT_DCJACK
+			hrtimer_cancel(&pd->vdm_timer);
+#endif
 			kfree(pd->vdm_tx_retry);
 			pd->vdm_tx_retry = NULL;
 
@@ -1991,7 +2113,9 @@ static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 
 		case USBPD_SVDM_DISCOVER_SVIDS:
 			pd->vdm_state = DISCOVERED_SVIDS;
-
+#ifdef CONFIG_HTC_BATT_DCJACK
+			hrtimer_cancel(&pd->vdm_timer);
+#endif
 			kfree(pd->vdm_tx_retry);
 			pd->vdm_tx_retry = NULL;
 
@@ -2106,6 +2230,9 @@ static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 			}
 
 			/* wait tVDMBusy, then retry */
+#ifdef CONFIG_HTC_BATT_DCJACK
+			hrtimer_cancel(&pd->vdm_timer);
+#endif
 			pd->vdm_tx = pd->vdm_tx_retry;
 			pd->vdm_tx_retry = NULL;
 			kick_sm(pd, VDM_BUSY_TIME);
@@ -2173,6 +2300,9 @@ static void handle_vdm_tx(struct usbpd *pd, enum pd_sop_type sop_type)
 			kfree(pd->vdm_tx_retry);
 		}
 		pd->vdm_tx_retry = pd->vdm_tx;
+#ifdef CONFIG_HTC_BATT_DCJACK
+		hrtimer_start(&pd->vdm_timer, ms_to_ktime(SENDER_RESPONSE_TIME), HRTIMER_MODE_REL);
+#endif
 	} else {
 		kfree(pd->vdm_tx);
 	}
@@ -2424,8 +2554,11 @@ enable_reg:
 		usbpd_err(&pd->dev, "Unable to enable vbus (%d)\n", ret);
 	else
 		pd->vbus_enabled = true;
-
+#ifdef CONFIG_HTC_BATT_DCJACK
+	count = 0;
+#else
 	count = 10;
+#endif
 	/*
 	 * Check to make sure VBUS voltage reaches above Vsafe5Vmin (4.75v)
 	 * before proceeding.
@@ -2437,9 +2570,10 @@ enable_reg:
 			break;
 		usleep_range(10000, 12000); /* Delay between two reads */
 	}
-
+#ifndef CONFIG_HTC_BATT_DCJACK
 	if (ret)
-		msleep(100); /* Delay to wait for VBUS ramp up if read fails */
+		msleep(100); /* Delay to wait for VBUS ramp up if read fails*/
+#endif
 
 	return ret;
 }
@@ -2541,8 +2675,13 @@ static void usbpd_sm(struct work_struct *w)
 		/* set due to dual_role class "mode" change */
 		if (pd->forced_pr != POWER_SUPPLY_TYPEC_PR_NONE)
 			val.intval = pd->forced_pr;
-		else /* Set CC back to DRP toggle */
-			val.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
+		else {
+			if (pd->typec_enable)
+				/* Set CC back to DRP toggle */
+				val.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
+			else
+				usbpd_err(&pd->dev, "Type-C is disabled\n");
+		}
 
 		power_supply_set_property(pd->usb_psy,
 				POWER_SUPPLY_PROP_TYPEC_POWER_ROLE, &val);
@@ -3367,9 +3506,26 @@ sm_done:
 	/* requeue if there are any new/pending RX messages */
 	if (!ret)
 		kick_sm(pd, 0);
+#ifdef CONFIG_HTC_BATT_DCJACK
+	else if(pd->vdm_tx && !hrtimer_active(&pd->timer)){
+		usbpd_err(&pd->dev, "Resend SVDM\n");
+		kick_sm(pd, 2);
+	}
+#endif
 
 	if (!pd->sm_queued)
 		pm_relax(&pd->dev);
+#ifdef  CONFIG_HTC_BATT_DCJACK
+	if (pd->non_compliance_hard_reset){
+		val.intval = 0;
+		power_supply_set_property(pd->usb_psy,
+				POWER_SUPPLY_PROP_PD_IN_NON_COMPLIANCE_HARD_RESET, &val);
+		pd->non_compliance_hard_reset = false;
+		usbpd_err(&pd->dev, "Reopen PD\n");
+		htc_typec_enable(true);
+	}
+#endif
+
 }
 
 static inline const char *src_current(enum power_supply_typec_mode typec_mode)
@@ -3393,9 +3549,45 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 	enum power_supply_typec_mode typec_mode;
 	union extcon_property_value eval;
 	int ret;
+#ifdef CONFIG_HTC_BATT_DCJACK
+	union power_supply_propval val2;
+	union power_supply_propval non_compliance_prop;
+	struct htc_batt_smb5_detect_data detect_data;
+#endif
 
 	if (ptr != pd->usb_psy || evt != PSY_EVENT_PROP_CHANGED)
 		return 0;
+
+#ifdef CONFIG_HTC_BATT_DCJACK
+	ret = power_supply_get_property(pd->usb_psy,
+				POWER_SUPPLY_PROP_DCJACK_REMOVED_PSY_CHANGED_NOTIFIER_LOCK, &val);
+	if (ret) {
+		usbpd_err(&pd->dev, "Unable to read dcjack removed psy_chagned notifier lock :%d.\n",
+				ret);
+		return ret;
+	}
+
+	if (val.intval){
+		usbpd_err(&pd->dev, "Ignore psy change and keep statues because of dcjack removed and USB ACOK actived :%d.\n",
+				val.intval);
+		return 0;
+	}
+
+	ret = power_supply_get_property(pd->usb_psy,
+			POWER_SUPPLY_PROP_TYPEC_MODE_CHANGE_IGNORED, &val);
+	if (ret) {
+		usbpd_err(&pd->dev, "Unable to read typec_mode change ignored :%d.\n",
+				ret);
+		return ret;
+	}
+
+	if (val.intval){
+		usbpd_err(&pd->dev, "Ignore psy change and keep statues because of typec mode change ignored :%d.\n",
+				val.intval);
+		return 0;
+	}
+
+#endif
 
 	ret = power_supply_get_property(pd->usb_psy,
 			POWER_SUPPLY_PROP_TYPEC_MODE, &val);
@@ -3414,6 +3606,27 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 		return ret;
 	}
 
+#ifdef CONFIG_HTC_BATT_DCJACK
+	ret = power_supply_get_property(pd->usb_psy,
+			POWER_SUPPLY_PROP_REAL_TYPE, &val2);
+	if (ret) {
+		usbpd_err(&pd->dev, "Unable to read USB TYPE: %d\n",
+				ret);
+		return ret;
+	}
+
+	ret = htc_battery_smb5_get_detect_data(&detect_data);
+	if (ret) {
+		usbpd_err(&pd->dev, "Unable to read store data with DCJACK disabled stage: %d\n",
+				ret);
+		return ret;
+	}
+
+	if (val2.intval == POWER_SUPPLY_TYPE_DCJACK) {
+		val.intval = detect_data.ok_to_pd;
+	}
+#endif
+
 	/* Don't proceed if PE_START=0; start USB directly if needed */
 	if (!val.intval && !pd->pd_connected &&
 			typec_mode >= POWER_SUPPLY_TYPEC_SOURCE_DEFAULT) {
@@ -3424,6 +3637,36 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 					ret);
 			return ret;
 		}
+
+#ifdef CONFIG_HTC_BATT_DCJACK
+		if (val.intval == POWER_SUPPLY_TYPE_DCJACK) {
+			val.intval = htc_battery_smb5_map_apsd_type2ps_type(detect_data.apsd_type);
+			ret = power_supply_get_property(pd->usb_psy,
+					POWER_SUPPLY_PROP_NONCOMPLIANCE_CABLE, &non_compliance_prop);
+			if (ret) {
+				usbpd_err(&pd->dev, "Unable to read USB TYPE: %d\n",
+						ret);
+				return ret;
+			}
+
+			ret = power_supply_get_property(pd->usb_psy,
+				POWER_SUPPLY_PROP_DCJACK_DISABLED, &val2);
+			if (ret) {
+				usbpd_err(&pd->dev, "Unable to read USB TYPE: %d\n",
+						ret);
+				return ret;
+			}
+
+			if (non_compliance_prop.intval && val2.intval){
+				usbpd_err(&pd->dev, "non compliance reset!!!!");
+
+				power_supply_set_property(pd->usb_psy,
+					POWER_SUPPLY_PROP_PD_IN_NON_COMPLIANCE_HARD_RESET, &non_compliance_prop);
+				htc_typec_enable(false);
+				pd->non_compliance_hard_reset = true;
+			}
+		}
+#endif
 
 		if (val.intval == POWER_SUPPLY_TYPE_USB ||
 			val.intval == POWER_SUPPLY_TYPE_USB_CDP ||
@@ -3455,7 +3698,7 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 			pd->current_state == PE_SNK_TRANSITION_TO_DEFAULT) ||
 		(pd->vbus_present && pd->current_state == PE_SNK_DISCOVERY))) {
 		usbpd_dbg(&pd->dev, "hard reset: typec mode:%d present:%d\n",
-			typec_mode, pd->vbus_present);
+				typec_mode, pd->vbus_present);
 		pd->typec_mode = typec_mode;
 		kick_sm(pd, 0);
 		return 0;
@@ -3467,8 +3710,8 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 	pd->typec_mode = typec_mode;
 
 	usbpd_dbg(&pd->dev, "typec mode:%d present:%d orientation:%d\n",
-			typec_mode, pd->vbus_present,
-			usbpd_get_plug_orientation(pd));
+						typec_mode, pd->vbus_present,
+									usbpd_get_plug_orientation(pd));
 
 	switch (typec_mode) {
 	/* Disconnect */
@@ -3672,6 +3915,12 @@ static int usbpd_dr_set_property(struct dual_role_phy_instance *dual_role,
 				return -EAGAIN;
 			}
 
+			if (pd->current_state == PE_SNK_READY &&
+					!is_sink_tx_ok(pd)) {
+				usbpd_err(&pd->dev, "Rp indicates SinkTxNG\n");
+				return -EAGAIN;
+			}
+
 			mutex_lock(&pd->swap_lock);
 			reinit_completion(&pd->is_ready);
 			pd->send_dr_swap = true;
@@ -3723,6 +3972,12 @@ static int usbpd_dr_set_property(struct dual_role_phy_instance *dual_role,
 			if (pd->current_state != PE_SRC_READY &&
 					pd->current_state != PE_SNK_READY) {
 				usbpd_err(&pd->dev, "power_role swap not allowed: PD not in Ready state\n");
+				return -EAGAIN;
+			}
+
+			if (pd->current_state == PE_SNK_READY &&
+					!is_sink_tx_ok(pd)) {
+				usbpd_err(&pd->dev, "Rp indicates SinkTxNG\n");
 				return -EAGAIN;
 			}
 
@@ -4021,7 +4276,7 @@ static ssize_t select_pdo_store(struct device *dev,
 	mutex_lock(&pd->swap_lock);
 
 	/* Only allowed if we are already in explicit sink contract */
-	if (pd->current_state != PE_SNK_READY) {
+	if (pd->current_state != PE_SNK_READY || !is_sink_tx_ok(pd)) {
 		usbpd_err(&pd->dev, "select_pdo: Cannot select new PDO yet\n");
 		ret = -EBUSY;
 		goto out;
@@ -4067,7 +4322,7 @@ static ssize_t select_pdo_store(struct device *dev,
 	if (pd->selected_pdo != pd->requested_pdo ||
 			pd->current_voltage != pd->requested_voltage) {
 		usbpd_err(&pd->dev, "select_pdo: request rejected\n");
-		ret = -ECONNREFUSED;
+		ret = -EINVAL;
 	}
 
 out:
@@ -4173,7 +4428,7 @@ static int trigger_tx_msg(struct usbpd *pd, bool *msg_tx_flag)
 	int ret = 0;
 
 	/* Only allowed if we are already in explicit sink contract */
-	if (pd->current_state != PE_SNK_READY) {
+	if (pd->current_state != PE_SNK_READY || !is_sink_tx_ok(pd)) {
 		usbpd_err(&pd->dev, "%s: Cannot send msg\n", __func__);
 		ret = -EBUSY;
 		goto out;
@@ -4329,6 +4584,87 @@ static ssize_t get_battery_status_show(struct device *dev,
 }
 static DEVICE_ATTR_RW(get_battery_status);
 
+static ssize_t vconn_en_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct usbpd *pd = dev_get_drvdata(dev);
+	int val = 0, ret = 0;
+	union power_supply_propval pval = {0};
+
+	if (sscanf(buf, "%d\n", &val) != 1) {
+		usbpd_err(&pd->dev, "please set 1/2 or 0 to enable/disable vconn\n");
+		return -EINVAL;
+	};
+
+	if (val == usbpd_get_plug_orientation(pd)) {
+		printk("please enter other CC number for vconn enabled\n");
+		return -EINVAL;
+	}
+	pval.intval = val;
+
+	if (!pd->vconn) {
+		pd->vconn = devm_regulator_get(pd->dev.parent, "vconn");
+		if (IS_ERR(pd->vconn)) {
+			usbpd_err(&pd->dev, "Unable to get vconn\n");
+			return -EINVAL;
+		}
+	}
+
+	if (val == 1 || val == 2) {
+		if (!pd->vconn_enabled) {
+			power_supply_set_property(pd->usb_psy, POWER_SUPPLY_PROP_VCONN_SEL, &pval);
+			ret = regulator_enable(pd->vconn);
+			pd->vconn_enabled = true;
+			if (ret < 0) {
+				usbpd_err(&pd->dev, "Unable to enable vconn\n");
+				pd->vconn_enabled = false;
+				pval.intval = 0;
+				power_supply_set_property(pd->usb_psy, POWER_SUPPLY_PROP_VCONN_SEL, &pval);
+			}
+		} else
+			usbpd_err(&pd->dev, "vconn is already enabled\n");
+	} else if (val == 0) {
+		if (pd->vconn_enabled) {
+			power_supply_set_property(pd->usb_psy, POWER_SUPPLY_PROP_VCONN_SEL, &pval);
+			ret = regulator_disable(pd->vconn);
+			pd->vconn_enabled = false;
+			if (ret) {
+				usbpd_err(&pd->dev, "Unable to disable vconn\n");
+				pd->vconn_enabled = true;
+			}
+		} else
+			usbpd_err(&pd->dev, "vconn is already disabled\n");
+	}
+
+	return size;
+}
+static DEVICE_ATTR_WO(vconn_en);
+
+static ssize_t typec_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct usbpd *pd = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", pd->typec_enable);
+}
+
+static ssize_t typec_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct usbpd *pd = dev_get_drvdata(dev);
+	int val = 0;
+
+	if (sscanf(buf, "%d\n", &val) != 1)
+		return -EINVAL;
+
+	pd->typec_enable = !!val;
+	usbpd_err(&pd->dev, "%s: set pd->typec_enable: %d\n", __func__, pd->typec_enable);
+	usbpd_set_state(pd, PE_ERROR_RECOVERY);
+
+	return size;
+}
+static DEVICE_ATTR_RW(typec_enable);
+
 static struct attribute *usbpd_attrs[] = {
 	&dev_attr_contract.attr,
 	&dev_attr_initial_pr.attr,
@@ -4353,6 +4689,8 @@ static struct attribute *usbpd_attrs[] = {
 	&dev_attr_get_pps_status.attr,
 	&dev_attr_get_battery_cap.attr,
 	&dev_attr_get_battery_status.attr,
+	&dev_attr_vconn_en.attr,
+	&dev_attr_typec_enable.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(usbpd);
@@ -4520,6 +4858,13 @@ struct usbpd *usbpd_create(struct device *parent)
 		goto put_psy;
 	}
 
+	pd->typec_enable = true;
+#ifdef CONFIG_HTC_BATT_DCJACK
+	hrtimer_init(&pd->vdm_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	pd->vdm_timer.function = vdm_timeout;
+	pd->non_compliance_hard_reset = false;
+#endif
+
 	/* Support reporting polarity and speed via properties */
 	extcon_set_property_capability(pd->extcon, EXTCON_USB,
 			EXTCON_PROP_USB_TYPEC_POLARITY);
@@ -4619,6 +4964,8 @@ struct usbpd *usbpd_create(struct device *parent)
 	if (ret)
 		goto del_inst;
 
+	gpd = pd;
+
 	/* force read initial power_supply values */
 	psy_changed(&pd->psy_nb, PSY_EVENT_PROP_CHANGED, pd->usb_psy);
 
@@ -4657,6 +5004,7 @@ void usbpd_destroy(struct usbpd *pd)
 		power_supply_put(pd->bms_psy);
 	destroy_workqueue(pd->wq);
 	device_unregister(&pd->dev);
+	gpd = NULL;
 }
 EXPORT_SYMBOL(usbpd_destroy);
 

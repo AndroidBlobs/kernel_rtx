@@ -5,6 +5,10 @@
 #include <linux/nls.h>
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget_configfs.h>
+#include <linux/delay.h>
+#include <asm/current.h>
+#include "../../char/diag/diagchar.h"
+#include <linux/power_supply.h>
 #include "configfs.h"
 #include "u_f.h"
 #include "u_os_desc.h"
@@ -28,6 +32,15 @@ static struct class *android_class;
 static struct device *android_device;
 static int index;
 static int gadget_index;
+static bool connect2pc;
+static bool usbmode;
+int usb_ats = 0;
+
+enum android_device_state {
+	USB_DISCONNECTED,
+	USB_CONNECTED,
+	USB_CONFIGURED,
+};
 
 struct device *create_function_device(char *name)
 {
@@ -89,9 +102,9 @@ struct gadget_info {
 	struct usb_composite_driver composite;
 	struct usb_composite_dev cdev;
 	bool use_os_desc;
-	bool unbinding;
 	char b_vendor_code;
 	char qw_sign[OS_STRING_QW_SIGN_LEN];
+	struct power_supply *usb_psy;
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
 	bool connected;
 	bool sw_connected;
@@ -287,12 +300,9 @@ static int unregister_gadget(struct gadget_info *gi)
 	if (!gi->composite.gadget_driver.udc_name)
 		return -ENODEV;
 
-	gi->unbinding = true;
 	ret = usb_gadget_unregister_driver(&gi->composite.gadget_driver);
 	if (ret)
 		return ret;
-
-	gi->unbinding = false;
 	kfree(gi->composite.gadget_driver.udc_name);
 	gi->composite.gadget_driver.udc_name = NULL;
 	return 0;
@@ -1427,10 +1437,14 @@ static void android_work(struct work_struct *data)
 	char *disconnected[2] = { "USB_STATE=DISCONNECTED", NULL };
 	char *connected[2]    = { "USB_STATE=CONNECTED", NULL };
 	char *configured[2]   = { "USB_STATE=CONFIGURED", NULL };
+	char *connect_pc_0[3]    = { "SWITCH_NAME=usb_connect2pc", "SWITCH_STATE=0", NULL };
+	char *connect_pc_1[3]    = { "SWITCH_NAME=usb_connect2pc", "SWITCH_STATE=1", NULL };
 	/* 0-connected 1-configured 2-disconnected*/
 	bool status[3] = { false, false, false };
 	unsigned long flags;
 	bool uevent_sent = false;
+	static enum android_device_state last_uevent = USB_DISCONNECTED, next_state = USB_DISCONNECTED;
+	static bool resend_disconnect = false;
 
 	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config)
@@ -1445,30 +1459,89 @@ static void android_work(struct work_struct *data)
 	}
 	spin_unlock_irqrestore(&cdev->lock, flags);
 
-	if (status[0]) {
-		kobject_uevent_env(&gi->dev->kobj,
-					KOBJ_CHANGE, connected);
-		pr_info("%s: sent uevent %s\n", __func__, connected[0]);
-		uevent_sent = true;
+	if (status[0] == true)
+		next_state = USB_CONNECTED;
+	else if (status[1] == true)
+		next_state = USB_CONFIGURED;
+	else if (status[2] == true)
+		next_state = USB_DISCONNECTED;
+
+	if (!connect2pc) {
+		if (status[0]) {
+			kobject_uevent_env(&gi->dev->kobj,
+						KOBJ_CHANGE, connected);
+			pr_info("%s: sent uevent %s\n", __func__, connected[0]);
+			uevent_sent = true;
+		}
 	}
 
 	if (status[1]) {
+		if (last_uevent == USB_CONFIGURED) {
+			pr_info("%s: sent missed DISCONNECT event\n", __func__);
+			kobject_uevent_env(&gi->dev->kobj,
+						KOBJ_CHANGE, disconnected);
+			msleep(70);
+		}
+
 		kobject_uevent_env(&gi->dev->kobj,
 					KOBJ_CHANGE, configured);
 		pr_info("%s: sent uevent %s\n", __func__, configured[0]);
 		uevent_sent = true;
 	}
 
-	if (status[2]) {
-		kobject_uevent_env(&gi->dev->kobj,
-					KOBJ_CHANGE, disconnected);
-		pr_info("%s: sent uevent %s\n", __func__, disconnected[0]);
-		uevent_sent = true;
+	if (usbmode == 0) {
+		//[Fix me] release the if() after porting ats and 5 100
+		//if ((get_debug_flag() & 0x100) || usb_ats || resend_disconnect) {
+		if (resend_disconnect) {
+			kobject_uevent_env(&gi->dev->kobj,
+						KOBJ_CHANGE, disconnected);
+			pr_info("%s: sent uevent %s\n", __func__, disconnected[0]);
+			uevent_sent = true;
+			resend_disconnect = false;
+			if (connect2pc) {
+				connect2pc = false;
+				pr_info("%s: re-set usb_connect2pc = %d\n", __func__, connect2pc);
+				kobject_uevent_env(&gi->dev->kobj,
+								KOBJ_CHANGE, connect_pc_0);
+			}
+		} else {
+			if (status[2]) {
+				kobject_uevent_env(&gi->dev->kobj,
+							KOBJ_CHANGE, disconnected);
+				pr_info("%s: sent uevent %s\n", __func__, disconnected[0]);
+				uevent_sent = true;
+			}
+		}
 	}
 
+	if (uevent_sent)
+		last_uevent = next_state;
+
 	if (!uevent_sent) {
-		pr_info("%s: did not send uevent (%d %d %pK)\n", __func__,
-			gi->connected, gi->sw_connected, cdev->config);
+		pr_info("%s: did not send uevent (%d %d %d %d %pK)\n", __func__,
+			gi->connected, gi->sw_connected, resend_disconnect, usbmode, cdev->config);
+		if (gi->connected == 0 && gi->sw_connected == 0 && !resend_disconnect && usbmode)
+			resend_disconnect = true;
+	}
+
+	if (gi->sw_connected && usbmode == 1 && !connect2pc) {
+		connect2pc = gi->sw_connected;
+		pr_info("%s: set usb_connect2pc = %d\n", __func__, connect2pc);
+		kobject_uevent_env(&gi->dev->kobj,
+					KOBJ_CHANGE, connect_pc_1);
+
+	} else if (!gi->sw_connected && usbmode == 0 && connect2pc) {
+		connect2pc = gi->sw_connected;
+		pr_info("%s: set usb_connect2pc = %d\n", __func__, connect2pc);
+		kobject_uevent_env(&gi->dev->kobj,
+					KOBJ_CHANGE, connect_pc_0);
+	}
+
+	if (!connect2pc) {
+		gi->cdev.first_dt_w_length = 0;
+		gi->cdev.first_string_w_length = 0;
+		pr_info("%s: OS_NOT_YET\n", __func__);
+		gi->cdev.os_type = OS_NOT_YET;
 	}
 }
 #endif
@@ -1572,8 +1645,7 @@ static void android_disconnect(struct usb_gadget *gadget)
 	acc_disconnect();
 #endif
 	gi->connected = 0;
-	if (!gi->unbinding)
-		schedule_work(&gi->work);
+	schedule_work(&gi->work);
 	composite_disconnect(gadget);
 }
 #endif
@@ -1630,10 +1702,28 @@ out:
 
 static DEVICE_ATTR(state, S_IRUGO, state_show, NULL);
 
+static ssize_t usb_connect2pc_show(struct device *pdev, struct device_attribute *attr,
+			char *buf)
+{
+	char *state = "0";
+
+	if (connect2pc)
+		state = "1";
+	else
+		state = "0";
+
+	return sprintf(buf, "%s\n", state);
+}
+
+static DEVICE_ATTR(usb_connect2pc, S_IRUGO, usb_connect2pc_show, NULL);
+
 static struct device_attribute *android_usb_attributes[] = {
 	&dev_attr_state,
+	&dev_attr_usb_connect2pc,
 	NULL
 };
+
+#include "htc_attr.c"
 
 static int android_device_create(struct gadget_info *gi)
 {
@@ -1646,7 +1736,7 @@ static int android_device_create(struct gadget_info *gi)
 	if (IS_ERR(gi->dev))
 		return PTR_ERR(gi->dev);
 
-	pr_debug("Creating gadget index %d\n", gadget_index);
+	pr_err("Creating gadget index %d\n", gadget_index);
 
 	dev_set_drvdata(gi->dev, gi);
 	if (!android_device)
@@ -1663,6 +1753,9 @@ static int android_device_create(struct gadget_info *gi)
 			return err;
 		}
 	}
+
+	if (gadget_index == 1)
+		setup_vendor_info(android_device);
 
 	return 0;
 }
@@ -1742,6 +1835,9 @@ static struct config_group *gadgets_make(
 	if (android_device_create(gi) < 0)
 		goto err;
 
+	gi->cdev.first_dt_w_length = 0;
+	gi->cdev.first_string_w_length = 0;
+
 	return &gi->group;
 
 err:
@@ -1798,6 +1894,9 @@ static int __init gadget_cfs_init(void)
 	config_group_init(&gadget_subsys.su_group);
 
 	ret = configfs_register_subsystem(&gadget_subsys);
+
+	connect2pc = false;
+	usbmode = false;
 
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
 	android_class = class_create(THIS_MODULE, "android_usb");

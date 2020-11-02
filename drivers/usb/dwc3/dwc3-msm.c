@@ -55,6 +55,8 @@
 #include "debug.h"
 #include "xhci.h"
 
+#include <linux/htc_flags.h>
+
 #define SDP_CONNETION_CHECK_TIME 10000 /* in ms */
 
 /* time out to wait for USB cable status notification (in ms)*/
@@ -286,6 +288,7 @@ struct dwc3_msm {
 	struct msm_bus_scale_pdata	*bus_scale_table;
 	struct power_supply	*usb_psy;
 	struct work_struct	vbus_draw_work;
+	struct work_struct	disable_work;
 	bool			in_host_mode;
 	bool			in_device_mode;
 	enum usb_device_speed	max_rh_port_speed;
@@ -326,6 +329,9 @@ struct dwc3_msm {
 	struct notifier_block	dpdm_nb;
 	struct regulator	*dpdm_reg;
 
+	/*Secondary USB port*/
+	int usb1_otg_vbus_en;
+	bool is_usb1;
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -339,6 +345,13 @@ struct dwc3_msm {
 #define USB_SSPHY_1P8_VOL_MIN		1800000 /* uV */
 #define USB_SSPHY_1P8_VOL_MAX		1800000 /* uV */
 #define USB_SSPHY_1P8_HPM_LOAD		23000	/* uA */
+
+static struct dwc3_msm *context = NULL;
+static struct dwc3_msm *sec_context = NULL;
+static int htc_id_backup;
+static int htc_vbus_backup;
+extern int htc_pd_get_usb_state(void);
+extern void htc_set_usbmode(bool);
 
 static void dwc3_pwr_event_handler(struct dwc3_msm *mdwc);
 static int dwc3_msm_gadget_vbus_draw(struct dwc3_msm *mdwc, unsigned int mA);
@@ -474,6 +487,76 @@ static inline bool dwc3_msm_is_superspeed(struct dwc3_msm *mdwc)
 	return dwc3_msm_is_dev_superspeed(mdwc);
 }
 
+/**
+ *RTX USB secondary port need to be probed or not
+ */
+bool isNeedtoProbeSecondaryPort(struct device *dev) {
+	char *htc_bootmode = htc_get_bootmode();
+	const char *msm_bus_name;
+
+	device_property_read_string(dev, "qcom,msm-bus,name", &msm_bus_name);
+
+	if (strcmp(msm_bus_name, "usb1") == 0) {
+		if ((strcmp(htc_bootmode, "offmode_charging") == 0)) {
+				pr_info("Do not probe USB secondary port under %s mode\n",htc_bootmode);
+				return false;
+		}
+	}
+	return true;
+}
+
+/**
+ *Enable RTX USB secondary port Vbus power enable pin: GPIO125
+ */
+void htc_request_secondary_port_vbus_id(struct dwc3_msm *mdwc) {
+	static bool usb1_otg_vbus_en_requested = false;
+	char *htc_bootmode = htc_get_bootmode();
+	int ret = 0;
+	u32 val;
+
+	mdwc->usb1_otg_vbus_en = of_get_named_gpio(mdwc->dev->of_node, "htc,usb1_otg_vbus_en", 0);
+	if (mdwc->usb1_otg_vbus_en < 0) {
+		pr_debug("GPIO: htc,usb1_gpio_en do not define\n");
+	} else {
+		if(gpio_is_valid(mdwc->usb1_otg_vbus_en)) {
+			if (!usb1_otg_vbus_en_requested)
+				ret = gpio_request(mdwc->usb1_otg_vbus_en, "usb1_otg_vbus_en");
+
+			if (ret) {
+				pr_err("USB secondary port Vbus(gpio:%d) Request failed!!!\n",mdwc->usb1_otg_vbus_en);
+			} else {
+				usb1_otg_vbus_en_requested = true;
+				mdwc->is_usb1 = true;
+				val = gpio_get_value(mdwc->usb1_otg_vbus_en);
+
+				if (val == 0) {
+					if (strcmp(htc_bootmode, "ftm") == 0)
+						gpio_direction_output(mdwc->usb1_otg_vbus_en, 0);
+					else {
+						gpio_direction_output(mdwc->usb1_otg_vbus_en, 1);
+						pr_info("Enable USB secondary port Vbus(gpio:%d)\n",mdwc->usb1_otg_vbus_en);
+					}
+				}
+			}
+		}
+	}
+}
+
+char *usb1_reconnect_0[3] = { "SWITCH_NAME=usb1_reconnect", "SWITCH_STATE=0", NULL };
+char *usb1_reconnect_1[3] = { "SWITCH_NAME=usb1_reconnect", "SWITCH_STATE=1", NULL };
+extern int get_carrier(void);
+extern void set_reset_flag(bool reset);
+
+void htc_reconnect_secondary_port(void) {
+	struct dwc3_msm *mdwc = sec_context;
+	if (mdwc) {
+		kobject_uevent_env(&mdwc->dev->kobj, KOBJ_CHANGE, usb1_reconnect_1);
+		pr_info("%s: sent uevent %s\n", __func__, usb1_reconnect_1[0]);
+		set_reset_flag(true);
+	}
+}
+EXPORT_SYMBOL(htc_reconnect_secondary_port);
+
 static int dwc3_msm_dbm_disable_updxfer(struct dwc3 *dwc, u8 usb_ep)
 {
 	struct dwc3_msm *mdwc = dev_get_drvdata(dwc->dev->parent);
@@ -482,6 +565,153 @@ static int dwc3_msm_dbm_disable_updxfer(struct dwc3 *dwc, u8 usb_ep)
 	dwc3_dbm_disable_update_xfer(mdwc->dbm, usb_ep);
 
 	return 0;
+}
+
+int usb_get_dwc_property(int prop_type)
+{
+	struct dwc3_msm *dwc3_msm = context;
+	union power_supply_propval pval = {0};
+	int ret = 0;
+
+	if (!dwc3_msm->usb_psy) {
+		dwc3_msm->usb_psy = power_supply_get_by_name("usb");
+		if (!dwc3_msm->usb_psy) {
+			dev_warn(dwc3_msm->dev, "Could not get usb power_supply due to battery driver not ready\n");
+			return -ENODEV;
+		}
+	}
+
+	switch(prop_type) {
+		case PROPERTY_CHG_STATUS:
+			power_supply_get_property(dwc3_msm->usb_psy, POWER_SUPPLY_PROP_REAL_TYPE, &pval);
+			if (pval.intval == POWER_SUPPLY_TYPE_USB) {
+				power_supply_get_property(dwc3_msm->usb_psy, POWER_SUPPLY_PROP_PRESENT, &pval);
+				if (pval.intval == 0)
+					ret = 0;
+				else if (pval.intval == 1)
+					ret = 1;
+			} else if (pval.intval == POWER_SUPPLY_TYPE_USB_DCP
+				|| pval.intval == POWER_SUPPLY_TYPE_USB_CDP
+				|| pval.intval == POWER_SUPPLY_TYPE_USB_HVDCP
+				|| pval.intval == POWER_SUPPLY_TYPE_USB_HVDCP_3
+				|| pval.intval == POWER_SUPPLY_TYPE_USB_PD){
+				ret = 2;
+			}
+			break;
+		default:
+			break;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(usb_get_dwc_property);
+
+static void dwc3_ext_event_notify(struct dwc3_msm *mdwc);
+
+static ssize_t usb1_connect_show(struct device *dev, struct device_attribute *attr,
+                char *buf)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+
+	if (mdwc->usb1_otg_vbus_en > 0) {
+		return snprintf(buf, PAGE_SIZE, "[USB1 OTG] Vbus enable pin(gpio%d),status: %s\n",
+				mdwc->usb1_otg_vbus_en, gpio_get_value(mdwc->usb1_otg_vbus_en)?"Enable":"Disable");
+	}
+
+	return snprintf(buf, PAGE_SIZE, "none\n");
+}
+
+static ssize_t usb1_connect_store(struct device *dev, struct device_attribute *attr,
+                const char *buf, size_t count)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+	u32 val = 0;
+
+	if (mdwc->is_usb1) {
+		sscanf(buf,"%d\n",&val);
+		if (val) {
+			if (val == 2) {
+				mdwc->vbus_active = false;
+				mdwc->id_state = DWC3_ID_FLOAT;
+				dwc3_ext_event_notify(mdwc);
+				gpio_set_value(mdwc->usb1_otg_vbus_en, 0);
+
+				msleep(3000);
+
+				mdwc->vbus_active = false;
+				mdwc->id_state = DWC3_ID_GROUND;
+				dwc3_ext_event_notify(mdwc);
+				gpio_set_value(mdwc->usb1_otg_vbus_en, 1);
+			} else {
+				mdwc->vbus_active = false;
+				mdwc->id_state = DWC3_ID_GROUND;
+				dwc3_ext_event_notify(mdwc);
+
+				gpio_set_value(mdwc->usb1_otg_vbus_en, 1);
+			}
+		} else {
+			mdwc->vbus_active = false;
+			mdwc->id_state = DWC3_ID_FLOAT;
+			dwc3_ext_event_notify(mdwc);
+
+			gpio_set_value_cansleep(mdwc->usb1_otg_vbus_en, 0);
+		}
+		printk("%s set value:%d usb1_vbus:gpio(%d) = %d\n",__func__,val, mdwc->usb1_otg_vbus_en,
+			gpio_get_value(mdwc->usb1_otg_vbus_en));
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(usb1_connect);
+
+
+void htc_dwc3_disable_usb(int state)
+{
+    struct dwc3_msm *mdwc = context;
+    struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+    bool usbstate = false;
+
+    printk(KERN_INFO "[USB] %s state : %d\n", __func__, state);
+
+    if (state == 1) {
+        dwc->usb_disable = 1;
+        htc_set_usbmode(false);
+        flush_work(&mdwc->resume_work);
+        if (!atomic_read(&dwc->in_lpm)) {
+            mdwc->vbus_active = 0;
+            mdwc->id_state = DWC3_ID_FLOAT;
+            dwc3_ext_event_notify(mdwc);
+        }
+    } else {
+        dwc->usb_disable = 0;
+        usbstate = (bool)htc_pd_get_usb_state();
+        htc_set_usbmode(usbstate);
+        mdwc->vbus_active = htc_vbus_backup;
+        mdwc->id_state = htc_id_backup;
+        queue_work(mdwc->dwc3_wq, &mdwc->resume_work);
+    }
+    return;
+}
+EXPORT_SYMBOL(htc_dwc3_disable_usb);
+
+static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on);
+static void usb_disable_work(struct work_struct *w)
+{
+    struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, disable_work);
+
+    printk(KERN_INFO "[USB] %s\n", __func__);
+    dwc3_otg_start_peripheral(mdwc, 0);
+    mdwc->drd_state = DRD_STATE_IDLE;
+    pm_runtime_put_sync(mdwc->dev);
+    return;
+}
+
+static void dwc3_msm_notify_usb_disabled(void)
+{
+    struct dwc3_msm *mdwc = context;
+    queue_work(mdwc->dwc3_wq, &mdwc->disable_work);
+    printk(KERN_INFO "[USB] %s\n", __func__);
+    return;
 }
 
 #if IS_ENABLED(CONFIG_USB_DWC3_GADGET) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
@@ -936,11 +1166,6 @@ static int gsi_startxfer_for_ep(struct usb_ep *ep)
 	struct dwc3_ep *dep = to_dwc3_ep(ep);
 	struct dwc3	*dwc = dep->dwc;
 
-	if (!(dep->flags & DWC3_EP_ENABLED)) {
-		dbg_log_string("ep:%s disabled\n", ep->name);
-		return -ESHUTDOWN;
-	}
-
 	memset(&params, 0, sizeof(params));
 	params.param0 = GSI_TRB_ADDR_BIT_53_MASK | GSI_TRB_ADDR_BIT_55_MASK;
 	params.param0 |= (ep->ep_intr_num << 16);
@@ -1115,11 +1340,6 @@ static int gsi_prepare_trbs(struct usb_ep *ep, struct usb_gsi_request *req)
 					: (req->num_bufs + 2);
 	struct scatterlist *sg;
 	struct sg_table *sgt;
-
-	if (!(dep->flags & DWC3_EP_ENABLED)) {
-		dbg_log_string("ep:%s disabled\n", ep->name);
-		return -ESHUTDOWN;
-	}
 
 	dep->trb_pool = dma_zalloc_coherent(dwc->sysdev,
 				num_trbs * sizeof(struct dwc3_trb),
@@ -2010,15 +2230,6 @@ static void dwc3_msm_notify_event(struct dwc3 *dwc, unsigned int event,
 					DWC3_GEVNTSIZ_INTMASK |
 					DWC3_GEVNTSIZ_SIZE((i+1)));
 			dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT((i+1)), 0);
-		}
-		break;
-	case DWC3_GSI_EVT_BUF_CLEAR:
-		dev_dbg(mdwc->dev, "DWC3_GSI_EVT_BUF_CLEAR\n");
-		for (i = 0; i < mdwc->num_gsi_event_buffers; i++) {
-			reg = dwc3_readl(dwc->regs, DWC3_GEVNTCOUNT((i+1)));
-			reg &= DWC3_GEVNTCOUNT_MASK;
-			dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT((i+1)), reg);
-			dbg_log_string("remaining EVNTCOUNT(%d)=%d", i+1, reg);
 		}
 		break;
 	case DWC3_GSI_EVT_BUF_FREE:
@@ -3057,6 +3268,7 @@ static int dwc3_msm_id_notifier(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	mdwc->ext_idx = enb->idx;
+	htc_id_backup = id;
 
 	dev_dbg(mdwc->dev, "host:%ld (id:%d) event received\n", event, id);
 
@@ -3116,6 +3328,7 @@ static int dwc3_msm_vbus_notifier(struct notifier_block *nb,
 	dev_dbg(mdwc->dev, "vbus:%ld event received\n", event);
 
 	mdwc->vbus_active = event;
+	htc_vbus_backup = mdwc->vbus_active;
 	if ((dwc->dr_mode == USB_DR_MODE_OTG) && !mdwc->in_restart)
 		queue_work(mdwc->dwc3_wq, &mdwc->resume_work);
 
@@ -3452,6 +3665,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	u32 val;
 	unsigned long irq_type;
 
+	htc_vbus_backup = 0;
+	htc_id_backup = 1;
+
+	if (!isNeedtoProbeSecondaryPort(dev)) {
+		return -EINVAL;
+	}
+
 	mdwc = devm_kzalloc(&pdev->dev, sizeof(*mdwc), GFP_KERNEL);
 	if (!mdwc)
 		return -ENOMEM;
@@ -3463,9 +3683,16 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	INIT_WORK(&mdwc->resume_work, dwc3_resume_work);
 	INIT_WORK(&mdwc->restart_usb_work, dwc3_restart_usb_work);
 	INIT_WORK(&mdwc->vbus_draw_work, dwc3_msm_vbus_draw_work);
+	INIT_WORK(&mdwc->disable_work, usb_disable_work);
 	INIT_DELAYED_WORK(&mdwc->sm_work, dwc3_otg_sm_work);
 	INIT_DELAYED_WORK(&mdwc->perf_vote_work, msm_dwc3_perf_vote_work);
 	INIT_DELAYED_WORK(&mdwc->sdp_check, check_for_sdp_connection);
+
+	htc_request_secondary_port_vbus_id(mdwc); //vbus and id pin of secondary port
+	if (mdwc->is_usb1)
+		sec_context = mdwc;
+	else
+		context = mdwc;
 
 	mdwc->dwc3_wq = alloc_ordered_workqueue("dwc3_wq", 0);
 	if (!mdwc->dwc3_wq) {
@@ -3787,10 +4014,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_ext_event_notify(mdwc);
 	}
 
+	dwc->notify_usb_disabled = dwc3_msm_notify_usb_disabled;
+
 	device_create_file(&pdev->dev, &dev_attr_mode);
 	device_create_file(&pdev->dev, &dev_attr_speed);
 	device_create_file(&pdev->dev, &dev_attr_usb_compliance_mode);
 	device_create_file(&pdev->dev, &dev_attr_bus_vote);
+	device_create_file(&pdev->dev, &dev_attr_usb1_connect);
 
 	return 0;
 
@@ -3849,6 +4079,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 
 	cancel_delayed_work_sync(&mdwc->perf_vote_work);
 	cancel_delayed_work_sync(&mdwc->sm_work);
+	cancel_work_sync(&mdwc->disable_work);
 
 	if (mdwc->hs_phy)
 		mdwc->hs_phy->flags &= ~PHY_HOST_MODE;
@@ -3896,6 +4127,11 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 
 	destroy_workqueue(mdwc->sm_usb_wq);
 	destroy_workqueue(mdwc->dwc3_wq);
+
+	if (mdwc->is_usb1)
+		sec_context = NULL;
+	else
+		context = NULL;
 
 	return 0;
 }

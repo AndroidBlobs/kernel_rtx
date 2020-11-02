@@ -24,6 +24,61 @@
 
 #include "u_os_desc.h"
 
+#define MAC_FIRST_DT_LENGTH  18
+#define WIN_LINUX_FIRST_DT1_LENGTH 8
+#define WIN_LINUX_FIRST_DT2_LENGTH 64
+
+/*
+ * Copyright (C) 2015 HTC, Inc.
+ * Author: HTC USB Team
+ * The following two functions are used for get OS_type for HTC device.
+ * In tranditional design,the length of request USB_DT_CONFIG will
+ * different. MAC is 4, Windows is 255, Linux is 9. But for MAC 10.11,
+ * both MAC/LINUX is 9. Therefore, the design check_MAC_or_LINUX is use
+ * for distinguish OS_type. This function will store the first length
+ * of USB_DT_STRING and USB_DT_DEVICE and base on the value to get os
+ * type.
+ * 1. The length of first USB_DT_STRING is 2 and USB_DT_DEVICE is 18
+ * for MAC.
+ * 2. The length of first USB_DT_DEVICE is 8/64 for Windows/Linux.
+ */
+static void check_MAC_or_LINUX(struct usb_composite_dev *cdev, int first_dt_length, int first_string_length)
+{
+	switch (first_dt_length)
+	{
+		case MAC_FIRST_DT_LENGTH:
+			if (first_string_length == 2)
+				cdev->os_type = OS_MAC;
+			break;
+		case WIN_LINUX_FIRST_DT1_LENGTH:
+		case WIN_LINUX_FIRST_DT2_LENGTH:
+			cdev->os_type = OS_LINUX;
+			break;
+		default:
+			break;
+	}
+
+	if (cdev->os_type == OS_LINUX)
+		pr_info("%s: Re detect as OS_LINUX \n", __func__);
+	else if (cdev->os_type == OS_MAC)
+		pr_info("%s: Re detect as OS_MAC \n", __func__);
+	else
+		pr_info("unknow os type");
+}
+
+static void get_os_type(struct usb_composite_dev *cdev, int length)
+{
+	if (length == 4) {
+		pr_info("%s: OS_MAC\n", __func__);
+		cdev->os_type = OS_MAC;
+	} else if (length == 255) {
+		pr_info("%s: OS_WINDOWS\n", __func__);
+		cdev->os_type = OS_WINDOWS;
+	} else if (length == 9 && cdev->os_type != OS_WINDOWS && cdev->os_type != OS_MAC) {
+		check_MAC_or_LINUX(cdev, cdev->first_dt_w_length, cdev->first_string_w_length);
+	}
+}
+
 /**
  * struct usb_os_string - represents OS String to be reported by a gadget
  * @bLength: total length of the entire descritor, always 0x12
@@ -1135,6 +1190,8 @@ void usb_remove_config(struct usb_composite_dev *cdev,
 
 	spin_unlock_irqrestore(&cdev->lock, flags);
 
+	cdev->os_type = OS_NOT_YET;
+
 	remove_config(cdev, config);
 }
 
@@ -1734,6 +1791,10 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		switch (w_value >> 8) {
 
 		case USB_DT_DEVICE:
+			if (cdev->first_dt_w_length == 0) {
+				cdev->first_dt_w_length = w_length;
+				pr_info("[USB] first_dt_w_length = %d \n", cdev->first_dt_w_length);
+			}
 			cdev->desc.bNumConfigurations =
 				count_configs(cdev, USB_DT_DEVICE);
 			cdev->desc.bMaxPacketSize0 =
@@ -1769,11 +1830,16 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				break;
 			/* FALLTHROUGH */
 		case USB_DT_CONFIG:
+			get_os_type(cdev, w_length);
 			value = config_desc(cdev, w_value);
 			if (value >= 0)
 				value = min(w_length, (u16) value);
 			break;
 		case USB_DT_STRING:
+			if (cdev->first_string_w_length == 0) {
+				cdev->first_string_w_length = w_length;
+				pr_info("[USB] first_string_w_length = %d \n", cdev->first_string_w_length);
+			}
 			value = get_string(cdev, req->buf,
 					w_index, w_value & 0xff);
 			if (value >= 0)
@@ -2135,8 +2201,10 @@ void composite_disconnect(struct usb_gadget *gadget)
 	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config)
 		reset_config(cdev);
-	if (cdev->driver->disconnect)
+	if (cdev->driver->disconnect) {
 		cdev->driver->disconnect(cdev);
+		cdev->os_type = OS_NOT_YET;
+	}
 	spin_unlock_irqrestore(&cdev->lock, flags);
 }
 

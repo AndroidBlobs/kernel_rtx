@@ -223,6 +223,8 @@
 
 #include <linux/nospec.h>
 
+#include <linux/miscdevice.h>
+
 #include "configfs.h"
 
 
@@ -230,6 +232,8 @@
 
 #define FSG_DRIVER_DESC		"Mass Storage Function"
 #define FSG_DRIVER_VERSION	"2009/09/11"
+#define FSG_VENDOR_NAME		"HTC"
+#define FSG_PRODUCT_NAME	"Android Phone"
 
 static const char fsg_string_interface[] = "Mass Storage";
 
@@ -253,6 +257,12 @@ static struct usb_gadget_strings *fsg_strings_array[] = {
 };
 
 /*-------------------------------------------------------------------------*/
+
+static struct miscdevice scsicmd_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "scsi_cmd",
+};
+static int scsi_adb_state = -1;
 
 struct fsg_dev;
 struct fsg_common;
@@ -315,6 +325,8 @@ struct fsg_common {
 	char inquiry_string[INQUIRY_STRING_LEN];
 
 	struct kref		ref;
+
+	struct work_struct	ums_adb_state_change_work;
 };
 
 struct fsg_dev {
@@ -1390,6 +1402,44 @@ static int do_mode_select(struct fsg_common *common, struct fsg_buffhd *bh)
 	return -EINVAL;
 }
 
+struct work_struct	ums_adb_state_change_work;
+char *switch_adb_off_state[3] = { "SWITCH_NAME=scsi_cmd", "SWITCH_STATE=0", NULL };
+char *switch_adb_on_state[3] = { "SWITCH_NAME=scsi_cmd", "SWITCH_STATE=1", NULL };
+
+static void handle_reserve_cmd_scsi(struct work_struct *work)
+{
+	printk(KERN_NOTICE "[USB] %s: scsi_adb_state=%d\n", __func__, scsi_adb_state);
+	kobject_uevent_env(&scsicmd_device.this_device->kobj, KOBJ_CHANGE,
+		(scsi_adb_state == 1) ? switch_adb_on_state:switch_adb_off_state );
+}
+
+static int do_reserve(struct fsg_common *common, struct fsg_buffhd *bh)
+{
+	if (common->curlun == common->luns[1])
+		return 0;
+
+	if (common->cmnd[1] == ('h'&0x1f) && common->cmnd[2] == 't'
+			&& common->cmnd[3] == 'c') {
+		/* No special options */
+		switch (common->cmnd[5]) {
+			case 0x01: /* enable adbd */
+				printk(KERN_NOTICE "[USB] Enable adb daemon from mass_storage\n");
+				scsi_adb_state = 1;
+				schedule_work(&ums_adb_state_change_work);
+				break;
+			case 0x02: /*disable adbd */
+				printk(KERN_NOTICE "[USB] Disable adb daemon from mass_storage\n");
+				scsi_adb_state = 0;
+				schedule_work(&ums_adb_state_change_work);
+				break;
+			default:
+				printk(KERN_DEBUG "Unknown hTC specific command..."
+						"(0x%2.2X)\n", common->cmnd[5]);
+				break;
+		}
+	}
+	return 0;
+}
 
 /*-------------------------------------------------------------------------*/
 
@@ -1712,6 +1762,8 @@ static int check_command(struct fsg_common *common, int cmnd_size,
 			    "but we got %d\n", name,
 			    cmnd_size, common->cmnd_size);
 			cmnd_size = common->cmnd_size;
+		} else if (common->cmnd[0] == RESERVE){
+			cmnd_size = common->cmnd_size;
 		} else {
 			common->phase_error = 1;
 			return -EINVAL;
@@ -2023,6 +2075,16 @@ static int do_scsi_command(struct fsg_common *common)
 			reply = do_write(common);
 		break;
 
+	case RESERVE:
+		common->data_size_from_cmnd = 0;
+		reply = check_command(common, 10, DATA_DIR_TO_HOST,
+				      (1<<1) | (0xf<<2) , 0,
+				      "RESERVE(6)");
+		if (reply == 0)
+			reply = do_reserve(common, bh);
+		break;
+
+
 	/*
 	 * Some mandatory commands that we recognize but don't implement.
 	 * They don't mean much in this setting.  It's left as an exercise
@@ -2031,7 +2093,6 @@ static int do_scsi_command(struct fsg_common *common)
 	 */
 	case FORMAT_UNIT:
 	case RELEASE:
-	case RESERVE:
 	case SEND_DIAGNOSTIC:
 		/* Fall through */
 
@@ -2930,7 +2991,7 @@ static int fsg_bind(struct usb_configuration *c, struct usb_function *f)
 					  fsg->common->can_stall);
 		if (ret)
 			return ret;
-		fsg_common_set_inquiry_string(fsg->common, NULL, NULL);
+		fsg_common_set_inquiry_string(fsg->common, FSG_VENDOR_NAME, FSG_PRODUCT_NAME);
 	}
 
 	if (!common->thread_task) {
@@ -3353,6 +3414,7 @@ static void fsg_free_inst(struct usb_function_instance *fi)
 
 	opts = fsg_opts_from_func_inst(fi);
 	fsg_common_put(opts->common);
+	misc_deregister(&scsicmd_device);
 	kfree(opts);
 }
 
@@ -3394,6 +3456,13 @@ static struct usb_function_instance *fsg_alloc_inst(void)
 
 	config_group_init_type_name(&opts->lun0.group, "lun.0", &fsg_lun_type);
 	configfs_add_default_group(&opts->lun0.group, &opts->func_inst.group);
+
+	INIT_WORK(&ums_adb_state_change_work, handle_reserve_cmd_scsi);
+
+	rc = misc_register(&scsicmd_device);
+	if (rc)
+		pr_err("[%s] failed to register misc scsi, rc=%d\n",
+				__func__, rc);
 
 	return &opts->func_inst;
 
