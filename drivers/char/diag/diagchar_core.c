@@ -47,6 +47,7 @@
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
 #endif
+#include <linux/htc_flags.h>
 
 MODULE_DESCRIPTION("Diag Char Driver");
 MODULE_LICENSE("GPL v2");
@@ -139,6 +140,13 @@ module_param(poolsize_qsc_usb, uint, 0000);
 static unsigned int max_clients = 15;
 module_param(max_clients, uint, 0000);
 
+/* This is the maximum number of pkt registrations supported at initialization */
+int diag_max_reg = 600;
+
+/* This is for DIAG_DCI diable/enable use. */
+static unsigned int dci_activate = 1;
+module_param(dci_activate, uint, S_IRUGO | S_IWUSR);
+
 /* Timer variables */
 static struct timer_list drain_timer;
 static int timer_in_progress;
@@ -160,6 +168,129 @@ struct diag_apps_data_t {
 static struct diag_apps_data_t hdlc_data;
 static struct diag_apps_data_t non_hdlc_data;
 static struct mutex apps_data_mutex;
+
+/* HTC_AUD_START HPKB:240 */
+int diag_rb_enable = 0;
+/* HTC_AUD_END HPKB:240 */
+
+/*static unsigned s, entries_once = 50;
+static ssize_t show_diag_registration(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	uint16_t i, p = 0, e;
+	e = s + entries_once;
+	e = (e  > diag_max_reg)?diag_max_reg:e;
+
+	p += sprintf(buf+p, "Registration(%d) #%d -> #%d\n",
+			diag_max_reg, s, e - 1);
+
+	for (i = s; i < e ; i++) {
+		p += sprintf(buf+p, "#%03d 0x%02x-0x%02x-(0x%04x-0x%04x)", i,
+			driver->table[i].cmd_code, driver->table[i].subsys_id,
+			driver->table[i].cmd_code_lo, driver->table[i].cmd_code_hi);
+		if (driver->table[i].client_id == APPS_PROC)
+			p += sprintf(buf+p, "APPS_PROC(%d)\n",
+				driver->table[i].process_id);
+		else if (driver->table[i].client_id == MODEM_PROC)
+			p += sprintf(buf+p, "MODEM_PROC\n");
+		else if (driver->table[i].client_id == LPASS_PROC)
+			p += sprintf(buf+p, "LPASS_PROC\n");
+		else if (driver->table[i].client_id == WCNSS_PROC)
+			p += sprintf(buf+p, "WCNSS_PROC\n");
+		else
+			p += sprintf(buf+p, "UNKNOWN SOURCE\n");
+	}
+
+	return p;
+}
+
+static ssize_t store_registration_index(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long u;
+	ret = strict_strtoul(buf, 10, (unsigned long *)&u);
+	if (ret < 0)
+		return ret;
+	if (u > diag_max_reg)
+		return 0;
+	s = u;
+	return count;
+}*/
+
+unsigned diag7k_debug_mask;
+static ssize_t show_diag_debug_mask(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	uint16_t p = 0;
+
+	p += sprintf(buf+p, "diag7k_debug_mask: %d\n",
+		diag7k_debug_mask);
+
+	return p;
+}
+
+static ssize_t store_diag7k_debug_mask(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long u;
+	ret = kstrtoul(buf, 10, (unsigned long *)&u);
+	if (ret < 0)
+		return ret;
+	diag7k_debug_mask = u;
+	return count;
+}
+
+/* HTC_AUD_START HPKB:240 */
+static ssize_t show_diag_rb(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int p = 0;
+	p += sprintf(buf+p, "diag_rb_enable=%d\n", diag_rb_enable);
+	return p;
+}
+
+/*
+* diag_rb_enable:
+* bit0: User trial ROM
+*/
+
+static ssize_t store_diag_rb(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long u = 0;
+	ret = kstrtoul(buf, 10, (unsigned long *)&u);
+	if (ret < 0)
+		return ret;
+	if (u > 0) {
+		diag_rb_enable = u;
+	} else {
+		/*
+		* Once we need to disable diag_rb_dump feature, we should clear memory
+		* map when we finish dumping (show_diag_rb_dump)
+		*/
+		diag_rb_enable = 0;
+	}
+	return count;
+}
+/* HTC_AUD_END HPKB:240 */
+
+/*static DEVICE_ATTR(diag_reg_table, 0664,
+	show_diag_registration, store_registration_index);*/
+static DEVICE_ATTR(diag7k_debug_mask, 0664,
+	show_diag_debug_mask, store_diag7k_debug_mask);
+/* HTC_AUD_START HPKB:240 */
+static DEVICE_ATTR(diag_rb, 0664,
+	show_diag_rb, store_diag_rb);
+/* HTC_AUD_END HPKB:240 */
+
+
+#include "diagfwd_htc.c"
+
+/* delayed_rsp_id 0 represents no delay in the response. Any other number
+ * means that the diag packet has a delayed response. */
 
 #define DIAGPKT_MAX_DELAYED_RSP 0xFFFF
 
@@ -195,12 +326,23 @@ static uint16_t diag_get_next_delayed_rsp_id(void)
 	return rsp_id;
 }
 
+static int Ispidequalcurid(void)
+{
+	int i;
+	for (i = 0; i < driver->num_clients; i++) {
+		if (driver->client_map[i].pid == current->tgid)
+			return 1;
+	}
+	return 0;
+}
+
 static int diag_switch_logging(struct diag_logging_mode_param_t *param);
 
 #define COPY_USER_SPACE_OR_ERR(buf, data, length)		\
 do {								\
-	if ((count < ret+length) || (copy_to_user(buf,		\
-			(void *)&data, length))) {		\
+	if (count < ret+length)					\
+		goto exit;					\
+	if (copy_to_user(buf, (void *)&data, length)) {		\
 		ret = -EFAULT;					\
 		break;							\
 	}							\
@@ -270,6 +412,7 @@ void diag_add_client(int i, struct file *file)
 {
 	struct diagchar_priv *diagpriv_data;
 
+	driver->client_map[i].timeout = 0;
 	driver->client_map[i].pid = current->tgid;
 	diagpriv_data = kmalloc(sizeof(struct diagchar_priv),
 							GFP_KERNEL);
@@ -315,6 +458,9 @@ static int diagchar_open(struct inode *inode, struct file *file)
 	int i = 0;
 	void *temp;
 
+	DIAG_INFO("%s:%s(parent:%s): tgid=%d\n", __func__,
+		current->comm, current->parent->comm, current->tgid);
+
 	if (driver) {
 		mutex_lock(&driver->diagchar_mutex);
 
@@ -348,7 +494,7 @@ static int diagchar_open(struct inode *inode, struct file *file)
 				pr_err_ratelimited("diag: Cannot open handle %s %d",
 						current->comm, current->tgid);
 				for (i = 0; i < driver->num_clients; i++)
-					pr_debug("%d) %s PID=%d", i,
+					DIAG_WARNING("%d) %s PID=%d", i,
 						driver->client_map[i].name,
 						driver->client_map[i].pid);
 				return -ENOMEM;
@@ -543,6 +689,7 @@ static int diag_remove_client_entry(struct file *file)
 	for (i = 0; i < driver->num_clients; i++) {
 		if (diagpriv_data && diagpriv_data->pid ==
 						driver->client_map[i].pid) {
+			driver->client_map[i].timeout = 0;
 			driver->client_map[i].pid = 0;
 			kfree(diagpriv_data);
 			diagpriv_data = NULL;
@@ -558,8 +705,8 @@ static int diagchar_close(struct inode *inode, struct file *file)
 {
 	int ret;
 
-	DIAG_LOG(DIAG_DEBUG_USERSPACE, "diag: %s process exit with pid = %d\n",
-		current->comm, current->tgid);
+	DIAG_LOG(DIAG_DEBUG_USERSPACE, "diag: process exit %s\n",
+		current->comm);
 	ret = diag_remove_client_entry(file);
 
 	return ret;
@@ -784,10 +931,12 @@ struct diag_cmd_reg_entry_t *diag_cmd_search(
 			    (temp_entry->cmd_code_lo <= entry->cmd_code) &&
 			    (proc == item->proc || proc == ALL_PROC)) {
 				if (entry->cmd_code == MODE_CMD) {
+#if 0
 					if (entry->subsys_id == RESET_ID &&
 						item->proc != APPS_DATA) {
 						continue;
 					}
+#endif
 					if (entry->subsys_id != RESET_ID &&
 						item->proc == APPS_DATA) {
 						continue;
@@ -944,7 +1093,7 @@ drop:
 			goto exit;
 		ret -= 4;
 	} else {
-		pr_debug("diag: In %s, Trying to copy ZERO bytes, total_data_len: %d\n",
+		DIAG_DBUG("diag: In %s, Trying to copy ZERO bytes, total_data_len: %d\n",
 			__func__, total_data_len);
 	}
 
@@ -1224,6 +1373,8 @@ static int mask_request_validate(unsigned char mask_buf[])
 			if ((ss_cmd == 0) || (ss_cmd == 0x1))
 				return 1;
 			break;
+		case 0x0B: /* DIAG_SUBSYS_FTM */
+			return 1;
 		default:
 			return 0;
 		}
@@ -1857,8 +2008,7 @@ static int diag_switch_logging(struct diag_logging_mode_param_t *param)
 		"Switch logging to %d mask:%0x\n", new_mode, peripheral_mask);
 
 	/* Update to take peripheral_mask */
-	if (new_mode != DIAG_MEMORY_DEVICE_MODE ||
-		new_mode != DIAG_MULTI_MODE) {
+	if (new_mode != DIAG_MEMORY_DEVICE_MODE) {
 		diag_update_real_time_vote(DIAG_PROC_MEMORY_DEVICE,
 					   MODE_REALTIME, ALL_PROC);
 	} else {
@@ -1866,9 +2016,8 @@ static int diag_switch_logging(struct diag_logging_mode_param_t *param)
 				      ALL_PROC);
 	}
 
-	if (!((new_mode == DIAG_MEMORY_DEVICE_MODE ||
-		new_mode == DIAG_MULTI_MODE) &&
-	    curr_mode == DIAG_USB_MODE)) {
+	if (!(new_mode == DIAG_MEMORY_DEVICE_MODE &&
+	      curr_mode == DIAG_USB_MODE)) {
 		queue_work(driver->diag_real_time_wq,
 			   &driver->diag_real_time_work);
 	}
@@ -2322,8 +2471,10 @@ static int diag_ioctl_query_pd_logging(struct diag_logging_mode_param_t *param)
 	int peripheral = -EINVAL;
 	uint32_t pd_mask = 0;
 
-	if (!param)
+	if (!param) {
+		DIAG_DBUG("query with no param set, returning error\n");
 		return -EINVAL;
+	}
 
 	if (!param->pd_mask) {
 		DIAG_LOG(DIAG_DEBUG_USERSPACE,
@@ -2573,7 +2724,7 @@ static int diag_ioctl_cmd_reg_compat(unsigned long ioarg)
 long diagchar_compat_ioctl(struct file *filp,
 			   unsigned int iocmd, unsigned long ioarg)
 {
-	int result = -EINVAL;
+	int i, result = -EINVAL;
 	int client_id = 0;
 	uint16_t delayed_rsp_id = 0;
 	uint16_t remote_dev;
@@ -2581,6 +2732,9 @@ long diagchar_compat_ioctl(struct file *filp,
 	struct diag_logging_mode_param_t mode_param;
 	struct diag_con_all_param_t con_param;
 	struct diag_query_pid_t pid_query;
+
+	DIAG_INFO("%s:%s(parent:%s): tgid=%d, iocmd=%d, ioarg=%d\n", __func__,
+		current->comm, current->parent->comm, current->tgid, (int)iocmd, (int)ioarg);
 
 	switch (iocmd) {
 	case DIAG_IOCTL_COMMAND_REG:
@@ -2708,6 +2862,19 @@ long diagchar_compat_ioctl(struct file *filp,
 		else
 			result = 0;
 		break;
+	case DIAG_IOCTL_NONBLOCKING_TIMEOUT:
+		for (i = 0; i < driver->num_clients; i++)
+			if (driver->client_map[i].pid == current->tgid)
+				break;
+		if (i == driver->num_clients)
+			return -EINVAL;
+		mutex_lock(&driver->diagchar_mutex);
+		driver->client_map[i].timeout = (int)ioarg;
+		driver->data_ready[i] = 0x0;
+		mutex_unlock(&driver->diagchar_mutex);
+
+		result = 1;
+		break;
 	case DIAG_IOCTL_QUERY_MD_PID:
 		if (copy_from_user((void *)&pid_query, (void __user *)ioarg,
 				   sizeof(pid_query))) {
@@ -2723,7 +2890,6 @@ long diagchar_compat_ioctl(struct file *filp,
 			result = -EFAULT;
 		else
 			result = 0;
-		break;
 	}
 	return result;
 }
@@ -2732,7 +2898,7 @@ long diagchar_compat_ioctl(struct file *filp,
 long diagchar_ioctl(struct file *filp,
 			   unsigned int iocmd, unsigned long ioarg)
 {
-	int result = -EINVAL;
+	int i, result = -EINVAL;
 	int client_id = 0;
 	uint16_t delayed_rsp_id;
 	uint16_t remote_dev;
@@ -2740,6 +2906,10 @@ long diagchar_ioctl(struct file *filp,
 	struct diag_logging_mode_param_t mode_param;
 	struct diag_con_all_param_t con_param;
 	struct diag_query_pid_t pid_query;
+
+	DIAG_INFO("%s:%s(parent:%s): tgid=%d, iocmd=%d, ioarg=%d\n", __func__,
+		current->comm, current->parent->comm,
+		current->tgid, (int)iocmd, (int)ioarg);
 
 	switch (iocmd) {
 	case DIAG_IOCTL_COMMAND_REG:
@@ -2866,6 +3036,19 @@ long diagchar_ioctl(struct file *filp,
 			result = -EFAULT;
 		else
 			result = 0;
+		break;
+	case DIAG_IOCTL_NONBLOCKING_TIMEOUT:
+		for (i = 0; i < driver->num_clients; i++)
+			if (driver->client_map[i].pid == current->tgid)
+				break;
+		if (i == driver->num_clients)
+			return -EINVAL;
+		mutex_lock(&driver->diagchar_mutex);
+		driver->client_map[i].timeout = (int)ioarg;
+		driver->data_ready[i] = 0x0;
+		mutex_unlock(&driver->diagchar_mutex);
+
+		result = 1;
 		break;
 	case DIAG_IOCTL_QUERY_MD_PID:
 		if (copy_from_user((void *)&pid_query, (void __user *)ioarg,
@@ -3263,6 +3446,13 @@ static int diag_user_process_userspace_data(const char __user *buf, int len)
 		return -EIO;
 	}
 
+	if (diag7k_debug_mask) {
+		DIAG_INFO("diag: user space data %d\n", len);
+		print_hex_dump(KERN_INFO, "write packet data"
+				" to modem(first 16 bytes)", 16, 1,
+				DUMP_PREFIX_ADDRESS, driver->user_space_data_buf, 16, 1);
+	}
+
 	/* Check for proc_type */
 	remote_proc = diag_get_remote(*(int *)driver->user_space_data_buf);
 	if (remote_proc) {
@@ -3371,7 +3561,7 @@ static int diag_user_process_apps_data(const char __user *buf, int len,
 		stm_size = stm_log_inv_ts(OST_ENTITY_DIAG, 0, user_space_data,
 					  len);
 		if (stm_size == 0) {
-			pr_debug("diag: In %s, stm_log_inv_ts returned size of 0\n",
+			DIAG_DBUG("diag: In %s, stm_log_inv_ts returned size of 0\n",
 				 __func__);
 		}
 		diagmem_free(driver, user_space_data, mempool);
@@ -3412,19 +3602,20 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 {
 	struct diag_dci_client_tbl *entry;
 	struct list_head *start, *temp;
-	int index = -1, i = 0, ret = 0;
+	int index = -1, i = 0, ret = 0, timeout = 0, w_ret = 0;
 	int data_type;
 	int copy_dci_data = 0;
 	int exit_stat = 0;
 	int write_len = 0;
 	struct diag_md_session_t *session_info = NULL;
-	struct pid *pid_struct = NULL;
-	struct task_struct *task_s = NULL;
 
 	mutex_lock(&driver->diagchar_mutex);
-	for (i = 0; i < driver->num_clients; i++)
-		if (driver->client_map[i].pid == current->tgid)
+	for (i = 0; i < driver->num_clients; i++) {
+		if (driver->client_map[i].pid == current->tgid) {
 			index = i;
+			timeout = driver->client_map[i].timeout;
+		}
+	}
 	mutex_unlock(&driver->diagchar_mutex);
 
 	if (index == -1) {
@@ -3435,17 +3626,31 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 		pr_err("diag: bad address from user side\n");
 		return -EFAULT;
 	}
-	wait_event_interruptible(driver->wait_q,
-			atomic_read(&driver->data_ready_notif[index]) > 0);
+
+	if (timeout)
+		w_ret = wait_event_interruptible_timeout(driver->wait_q,
+				atomic_read(&driver->data_ready_notif[index]) > 0, timeout * HZ);
+	else
+		w_ret = wait_event_interruptible(driver->wait_q,
+				atomic_read(&driver->data_ready_notif[index]) > 0);
+
+	DIAG_DBUG("%s:%s(parent:%s): tgid=%d, w_ret=%d\n", __func__,
+		current->comm, current->parent->comm, current->tgid, w_ret);
 
 	mutex_lock(&driver->diagchar_mutex);
 
 	if ((driver->data_ready[index] & USER_SPACE_DATA_TYPE) &&
 	    (driver->logging_mode == DIAG_MEMORY_DEVICE_MODE ||
 	     driver->logging_mode == DIAG_MULTI_MODE)) {
-		pr_debug("diag: process woken up\n");
+		DIAG_DBUG("diag: process woken up\n");
 		/*Copy the type of data being passed*/
 		data_type = driver->data_ready[index] & USER_SPACE_DATA_TYPE;
+		if (strncmp(current->comm, "diag_mdlog", 10) == 0
+			|| strncmp(current->comm, "diag_socket_log", 15) == 0)
+			data_type = USER_SPACE_DATA_TYPE;
+		else
+			data_type = USERMODE_DIAGFWD;
+		DIAG_DBUG("data type= %d\n", data_type);
 		driver->data_ready[index] ^= USER_SPACE_DATA_TYPE;
 		atomic_dec(&driver->data_ready_notif[index]);
 		COPY_USER_SPACE_OR_ERR(buf, data_type, sizeof(int));
@@ -3666,19 +3871,8 @@ exit:
 		list_for_each_safe(start, temp, &driver->dci_client_list) {
 			entry = list_entry(start, struct diag_dci_client_tbl,
 									track);
-			pid_struct = find_get_pid(entry->tgid);
-			if (!pid_struct)
+			if (entry->client->tgid != current->tgid)
 				continue;
-			task_s = get_pid_task(pid_struct, PIDTYPE_PID);
-			if (!task_s) {
-				DIAG_LOG(DIAG_DEBUG_DCI,
-				"diag: valid task doesn't exist for pid = %d\n",
-				entry->tgid);
-				continue;
-			}
-			if (task_s == entry->client)
-				if (entry->client->tgid != current->tgid)
-					continue;
 			if (!entry->in_service)
 				continue;
 			if (copy_to_user(buf + ret, &data_type, sizeof(int))) {
@@ -3728,6 +3922,9 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	int payload_len = 0;
 	const char __user *payload_buf = NULL;
 
+	DIAG_DBUG("%s:%s(parent:%s): tgid=%d\n", __func__,
+		current->comm, current->parent->comm, current->tgid);
+
 	/*
 	 * The data coming from the user sapce should at least have the
 	 * packet type heeader.
@@ -3750,7 +3947,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 		    (pkt_type == DCI_PKT_TYPE) ||
 		    (pkt_type & DATA_TYPE_DCI_LOG) ||
 		    (pkt_type & DATA_TYPE_DCI_EVENT))) {
-			pr_debug("diag: In %s, Dropping non DCI packet type\n",
+			DIAG_DBUG("diag: In %s, Dropping non DCI packet type\n",
 				 __func__);
 			return -EIO;
 		}
@@ -3759,7 +3956,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	payload_buf = buf + sizeof(int);
 	payload_len = count - sizeof(int);
 
-	if (pkt_type == DCI_PKT_TYPE)
+	if (pkt_type == DCI_PKT_TYPE && dci_activate)
 		return diag_user_process_dci_apps_data(payload_buf,
 						       payload_len,
 						       pkt_type);
@@ -3771,6 +3968,12 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	else if (pkt_type == USER_SPACE_DATA_TYPE)
 		return diag_user_process_userspace_data(payload_buf,
 							payload_len);
+	else if (Ispidequalcurid()
+		&& ((strncmp(current->comm, "htc58diag", 9) == 0)
+		|| (strncmp(current->comm, "diagloader", 10) == 0)
+		|| (strncmp(current->comm, "htcmodulediag", 13) == 0)))
+		return diag_user_process_userspace_data(payload_buf, payload_len);
+
 	if (pkt_type & (DATA_TYPE_DCI_LOG | DATA_TYPE_DCI_EVENT)) {
 		err = diag_user_process_dci_apps_data(payload_buf, payload_len,
 						      pkt_type);
@@ -4064,6 +4267,19 @@ static int diagchar_setup_cdev(dev_t devno)
 	if (!driver->diag_dev)
 		return -EIO;
 
+	/*err = device_create_file(driver->diag_dev, &dev_attr_diag_reg_table);
+	if (err)
+		DIAG_INFO("dev_attr_diag_reg_table registration failed !\n\n");*/
+	err = device_create_file(driver->diag_dev, &dev_attr_diag7k_debug_mask);
+	if (err)
+		DIAG_INFO("dev_attr_diag7k_debug_mask registration failed !\n\n");
+
+/* HTC_AUD_START HPKB:240 */
+	err = device_create_file(driver->diag_dev, &dev_attr_diag_rb);
+	if (err)
+		DIAG_INFO("dev_attr_diag_rb registration failed !\n\n");
+/* HTC_AUD_END HPKB:240 */
+
 	driver->diag_dev->power.wakeup = wakeup_source_register("DIAG_WS");
 	return 0;
 
@@ -4071,6 +4287,9 @@ static int diagchar_setup_cdev(dev_t devno)
 
 static int diagchar_cleanup(void)
 {
+	DIAG_INFO("%s:%s(parent:%s): tgid=%d\n", __func__,
+		current->comm, current->parent->comm, current->tgid);
+
 	if (driver) {
 		if (driver->cdev) {
 			/* TODO - Check if device exists before deleting */
@@ -4090,8 +4309,12 @@ static int __init diagchar_init(void)
 {
 	dev_t dev;
 	int ret, i;
+	unsigned int kernel_flag = get_kernel_flag();
 
-	pr_debug("diagfwd initializing ..\n");
+	DIAG_WARNING("diagfwd initializing, kernel_flag=[0x%x] ..\n", kernel_flag);
+	if (kernel_flag & KERNEL_FLAG_ENABLE_DIAG_LOG)
+		diag7k_debug_mask = 1;
+
 	ret = 0;
 	driver = kzalloc(sizeof(struct diagchar_dev) + 5, GFP_KERNEL);
 	if (!driver)
@@ -4194,7 +4417,7 @@ static int __init diagchar_init(void)
 	diagfwd_cntl_channel_init();
 	if (driver->dci_state == DIAG_DCI_NO_ERROR)
 		diag_dci_channel_init();
-	pr_debug("diagchar initializing ..\n");
+	DIAG_DBUG("diagchar initializing ..\n");
 	driver->num = 1;
 	driver->name = ((void *)driver) + sizeof(struct diagchar_dev);
 	strlcpy(driver->name, "diag", 5);
@@ -4215,7 +4438,7 @@ static int __init diagchar_init(void)
 	mutex_init(&driver->diag_id_mutex);
 	INIT_LIST_HEAD(&driver->diag_id_list);
 	diag_add_diag_id_to_list(DIAG_ID_APPS, "APPS", APPS_DATA, APPS_DATA);
-	pr_debug("diagchar initialized now");
+	DIAG_DBUG("diagchar initialized now");
 	#ifdef CONFIG_DIAGFWD_BRIDGE_CODE
 	diag_register_with_mhi();
 	#endif

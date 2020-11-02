@@ -271,7 +271,7 @@ static void usb_read_work_fn(struct work_struct *work)
 
 	if (!atomic_read(&ch->connected) || !ch->enabled ||
 	    atomic_read(&ch->read_pending) || !atomic_read(&ch->diag_state)) {
-		pr_debug_ratelimited("diag: Discarding USB read, ch: %s e: %d, c: %d, p: %d, d: %d\n",
+		DIAG_DBUG("diag: Discarding USB read, ch: %s e: %d, c: %d, p: %d, d: %d\n",
 				     ch->name, ch->enabled,
 				     atomic_read(&ch->connected),
 				     atomic_read(&ch->read_pending),
@@ -287,7 +287,7 @@ static void usb_read_work_fn(struct work_struct *work)
 		req->length = USB_MAX_OUT_BUF;
 		err = usb_diag_read(ch->hdl, req);
 		if (err) {
-			pr_debug("diag: In %s, error in reading from USB %s, err: %d\n",
+			DIAG_DBUG("diag: In %s, error in reading from USB %s, err: %d\n",
 				 __func__, ch->name, err);
 			atomic_set(&ch->read_pending, 0);
 			if (err != -EIO && err != -ESHUTDOWN)
@@ -299,6 +299,7 @@ static void usb_read_work_fn(struct work_struct *work)
 	spin_unlock_irqrestore(&ch->lock, flags);
 }
 
+extern bool vendor_cmd;
 static void usb_read_done_work_fn(struct work_struct *work)
 {
 	struct diag_request *req = NULL;
@@ -318,6 +319,14 @@ static void usb_read_done_work_fn(struct work_struct *work)
 	req = ch->read_ptr;
 	ch->read_cnt++;
 
+#if DIAG_XPST && !defined(CONFIG_DIAGFWD_BRIDGE_CODE)
+	if (vendor_cmd) {
+		req->buf = ch->read_buf;
+		req->length = USB_MAX_OUT_BUF;
+		usb_diag_read(ch->hdl, req);
+		return;
+	}
+#endif
 	if (ch->ops && ch->ops->read_done && req->status >= 0)
 		ch->ops->read_done(req->buf, req->actual, ch->ctxt);
 }
@@ -553,7 +562,7 @@ int diag_usb_write(int id, unsigned char *buf, int len, int ctxt)
 
 	if (!usb_info->hdl || !atomic_read(&usb_info->connected) ||
 	    !atomic_read(&usb_info->diag_state)) {
-		pr_debug_ratelimited("diag: USB ch %s is not connected\n",
+		DIAG_DBUG("diag: USB ch %s is not connected\n",
 				     usb_info->name);
 		diagmem_free(driver, req, usb_info->mempool);
 		spin_unlock_irqrestore(&usb_info->write_lock, flags);
@@ -679,8 +688,7 @@ int diag_usb_register(int id, int ctxt, struct diag_mux_ops *ops)
 	}
 	ch->enabled = 1;
 	wake_up_interruptible(&ch->wait_q);
-	DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-		"diag: Successfully registered USB %s\n", ch->name);
+	DIAG_DBUG("diag: Successfully registered USB %s\n", ch->name);
 	return 0;
 
 err:

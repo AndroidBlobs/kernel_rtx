@@ -452,7 +452,6 @@ static void diagfwd_data_read_untag_done(struct diagfwd_info *fwd_info,
 	struct diagfwd_buf_t *temp_fwdinfo_upd = NULL;
 	int flag_buf_1 = 0, flag_buf_2 = 0;
 	uint8_t peripheral, temp_diagid_val;
-	unsigned char *buf_offset = NULL;
 
 	if (!fwd_info || !buf || len <= 0) {
 		diag_ws_release();
@@ -507,24 +506,9 @@ static void diagfwd_data_read_untag_done(struct diagfwd_info *fwd_info,
 		}
 
 		while (processed < len) {
-			/* Debug log to check diag_id header validity*/
 			pr_debug("diag_fr:untagged packet buf contents: %02x %02x %02x %02x\n",
 			 *temp_buf_main, *(temp_buf_main+1),
 			 *(temp_buf_main+2), *(temp_buf_main+3));
-
-			/* Debug log ONLY for CMD channel*/
-			if (fwd_info->type == TYPE_CMD) {
-				/* buf_offset taking into account
-				 * diag_id header and non-hdlc header
-				 */
-				buf_offset = temp_buf_main + 8;
-
-				DIAG_LOG(DIAG_DEBUG_CMD_INFO,
-				"diag: cmd rsp (%02x %02x %02x %02x) received from peripheral: %d\n",
-				*(buf_offset), *(buf_offset+1),
-				*(buf_offset+2), *(buf_offset+3), peripheral);
-			}
-
 			packet_len =
 				*(uint16_t *) (temp_buf_main + 2);
 			if (packet_len > PERIPHERAL_BUF_SZ)
@@ -629,7 +613,7 @@ static void diagfwd_data_read_done(struct diagfwd_info *fwd_info,
 {
 	int err = 0;
 	int write_len = 0;
-	unsigned char *write_buf = NULL, *buf_offset = NULL;
+	unsigned char *write_buf = NULL;
 	struct diagfwd_buf_t *temp_buf = NULL;
 	uint8_t hdlc_disabled = 0;
 
@@ -654,16 +638,6 @@ static void diagfwd_data_read_done(struct diagfwd_info *fwd_info,
 	mutex_lock(&fwd_info->data_mutex);
 
 	hdlc_disabled = driver->p_hdlc_disabled[fwd_info->peripheral];
-
-	if (fwd_info->type == TYPE_CMD) {
-		/*buf_offset taking into account non-hdlc header */
-		buf_offset = buf + 4;
-
-		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
-		"diag: cmd rsp(%02x %02x %02x %02x) received from peripheral: %d\n",
-		*(buf_offset), *(buf_offset+1), *(buf_offset+2),
-		*(buf_offset+3), fwd_info->peripheral);
-	}
 
 	if (!driver->feature[fwd_info->peripheral].encode_hdlc) {
 		if (fwd_info->buf_1 && fwd_info->buf_1->data == buf) {
@@ -1158,15 +1132,14 @@ int diagfwd_write(uint8_t peripheral, uint8_t type, void *buf, int len)
 	int err = 0;
 	uint8_t retry_count = 0;
 	uint8_t max_retries = 3;
-	unsigned char *temp_buf = NULL;
 
-	if (peripheral >= NUM_PERIPHERALS || type >= NUM_TYPES || !buf)
+	if (peripheral >= NUM_PERIPHERALS || type >= NUM_TYPES)
 		return -EINVAL;
 
 	if (type == TYPE_CMD || type == TYPE_DCI_CMD) {
 		if (!driver->feature[peripheral].rcvd_feature_mask ||
 			!driver->feature[peripheral].sent_feature_mask) {
-			pr_debug_ratelimited("diag: In %s, feature mask for peripheral: %d not received or sent yet\n",
+			DIAGFWD_DBUG("diag: In %s, feature mask for peripheral: %d not received or sent yet\n",
 					     __func__, peripheral);
 			return 0;
 		}
@@ -1190,17 +1163,6 @@ int diagfwd_write(uint8_t peripheral, uint8_t type, void *buf, int len)
 
 	if (!(fwd_info->p_ops && fwd_info->p_ops->write && fwd_info->ctxt))
 		return -EIO;
-
-	if (type == TYPE_CMD) {
-		temp_buf = (unsigned char *)(buf);
-		/* Only raw bytes is sent to peripheral,
-		 * HDLC/NON-HDLC need not be considered
-		 */
-		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
-		"diag: cmd (%02x %02x %02x %02x) ready to be written to p: %d\n",
-		*(temp_buf), *(temp_buf+1), *(temp_buf+2), *(temp_buf+3),
-		peripheral);
-	}
 
 	while (retry_count < max_retries) {
 		err = 0;
@@ -1320,13 +1282,13 @@ int diagfwd_channel_open(struct diagfwd_info *fwd_info)
 		return -EIO;
 
 	if (!fwd_info->inited) {
-		pr_debug("diag: In %s, channel is not inited, p: %d, t: %d\n",
+		DIAGFWD_DBUG("diag: In %s, channel is not inited, p: %d, t: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type);
 		return -EINVAL;
 	}
 
 	if (fwd_info->ch_open) {
-		pr_debug("diag: In %s, channel is already open, p: %d, t: %d\n",
+		DIAGFWD_DBUG("diag: In %s, channel is already open, p: %d, t: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type);
 		return 0;
 	}
@@ -1562,7 +1524,7 @@ void diagfwd_channel_read(struct diagfwd_info *fwd_info)
 	}
 
 	if (!fwd_info->inited || !atomic_read(&fwd_info->opened)) {
-		pr_debug("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
+		DIAGFWD_DBUG("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type,
 			 fwd_info->inited, atomic_read(&fwd_info->opened),
 			 fwd_info->ch_open);
@@ -1634,7 +1596,7 @@ static void diagfwd_queue_read(struct diagfwd_info *fwd_info)
 		return;
 
 	if (!fwd_info->inited || !atomic_read(&fwd_info->opened)) {
-		pr_debug("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
+		DIAGFWD_DBUG("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type,
 			 fwd_info->inited, atomic_read(&fwd_info->opened),
 			 fwd_info->ch_open);

@@ -22,6 +22,7 @@
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/device.h>
+#include <linux/usb/usbdiag.h>
 #include <linux/atomic.h>
 #include "diagfwd_bridge.h"
 
@@ -55,6 +56,9 @@
 
 #define ALL_PROC		-1
 
+#define MODEM_PROC		0
+#define LPASS_PROC		2
+#define WCNSS_PROC		3
 #define REMOTE_DATA		4
 
 #define USER_SPACE_DATA		16384
@@ -308,6 +312,8 @@ do {						\
 enum remote_procs {
 	MDM = 1,
 	MDM2 = 2,
+	MDM3 = 3,
+	MDM4 = 4,
 	QSC = 5,
 };
 
@@ -404,6 +410,7 @@ struct diag_cmd_reg_tbl_t {
 struct diag_client_map {
 	char name[20];
 	int pid;
+	int timeout;
 };
 
 struct real_time_vote_t {
@@ -689,6 +696,11 @@ struct diagchar_dev {
 	/* Power related variables */
 	struct diag_ws_ref_t dci_ws;
 	struct diag_ws_ref_t md_ws;
+	/* HTC related variables */
+	int qxdm2sd_drop;
+	int qxdmusb_drop;
+	struct timeval st0;
+	struct timeval st1;
 	/* Pointers to Diag Masks */
 	struct diag_mask_info *msg_mask;
 	struct diag_mask_info *log_mask;
@@ -714,6 +726,15 @@ struct diagchar_dev {
 };
 
 extern struct diagchar_dev *driver;
+
+#define DIAG_DBG_READ	1
+#define DIAG_DBG_WRITE	2
+#define DIAG_DBG_DROP	3
+extern unsigned diag7k_debug_mask;
+#define DIAGFWD_7K_RAWDATA(buf, src, flag) \
+	__diagfwd_dbg_raw_data(buf, src, flag, diag7k_debug_mask)
+void __diagfwd_dbg_raw_data(void *buf, const char *src, unsigned dbg_flag, unsigned mask);
+
 
 extern int wrap_enabled;
 extern uint16_t wrap_count;

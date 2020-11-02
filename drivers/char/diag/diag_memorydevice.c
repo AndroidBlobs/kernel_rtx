@@ -217,7 +217,7 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 			driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
 			atomic_inc(&driver->data_ready_notif[i]);
 		}
-		pr_debug("diag: wake up logging process\n");
+		DIAG_DBUG("diag: wake up logging process\n");
 		wake_up_interruptible(&driver->wait_q);
 	}
 	mutex_unlock(&driver->diagchar_mutex);
