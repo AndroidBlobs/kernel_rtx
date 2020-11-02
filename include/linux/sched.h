@@ -258,6 +258,7 @@ static inline int sched_unisolate_cpu_unlocked(int cpu)
 }
 #endif
 
+extern void show_thread_group_state_filter(const char *tg_comm, unsigned long state_filter);
 extern void scheduler_tick(void);
 
 #define	MAX_SCHEDULE_TIMEOUT		LONG_MAX
@@ -1059,6 +1060,8 @@ struct task_struct {
 #ifdef CONFIG_DEBUG_MUTEXES
 	/* Mutex deadlock detection: */
 	struct mutex_waiter		*blocked_on;
+	struct task_struct		*blocked_by;
+	unsigned long			blocked_since;
 #endif
 
 #ifdef CONFIG_TRACE_IRQFLAGS

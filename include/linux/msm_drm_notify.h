@@ -20,11 +20,21 @@
 /* A hardware display blank early change occurred */
 #define MSM_DRM_EARLY_EVENT_BLANK		0x02
 
+/* HTC: Primary panel is toggling reset pin */
+#define MSM_DRM_EVENT_PANEL_RESET_TOGGLE	0x10
+
 enum {
 	/* panel: power on */
 	MSM_DRM_BLANK_UNBLANK,
 	/* panel: power off */
 	MSM_DRM_BLANK_POWERDOWN,
+};
+
+enum {
+	MSM_DRM_RESET_EARLY_HIGH,
+	MSM_DRM_RESET_HIGH,
+	MSM_DRM_RESET_EARLY_LOW,
+	MSM_DRM_RESET_LOW,
 };
 
 enum msm_drm_display_id {
@@ -42,4 +52,5 @@ struct msm_drm_notifier {
 
 int msm_drm_register_client(struct notifier_block *nb);
 int msm_drm_unregister_client(struct notifier_block *nb);
+int msm_drm_notifier_call_chain(unsigned long val, void *v);
 #endif

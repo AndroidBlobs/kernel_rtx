@@ -2,6 +2,10 @@
 #ifndef _GPIO_KEYS_H
 #define _GPIO_KEYS_H
 
+#define KEY_LOGD(fmt, args...) pr_debug("[KEY] "fmt, ##args)
+#define KEY_LOGI(fmt, args...) pr_info("[KEY] "fmt, ##args)
+#define KEY_LOGE(fmt, args...) pr_err("[KEY][ERR] "fmt, ##args)
+
 struct device;
 
 /**

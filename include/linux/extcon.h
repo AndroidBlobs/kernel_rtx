@@ -84,6 +84,14 @@
 #define EXTCON_DISP_DP		44	/* Display Port */
 #define EXTCON_DISP_HMD		45	/* Head-Mounted Display */
 
+// HTC_AUD_START - HPKB:2469|HPKB:240|HPKB:6799
+/* Audio virtual connector */
+#define EXTCON_AUDIO_BEATS      50
+#define EXTCON_AUDIO_DQ         51
+#define EXTCON_AUDIO_FM         52
+#define EXTCON_AUDIO_UNSUPPORTED        53
+// HTC_AUD_END - HPKB:2469|HPKB:240|HPKB:6799
+
 /* Miscellaneous external connector */
 #define EXTCON_DOCK		60
 #define EXTCON_JIG		61

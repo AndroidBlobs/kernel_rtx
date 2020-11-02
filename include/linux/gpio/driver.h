@@ -140,6 +140,9 @@ struct gpio_chip {
 
 	void			(*dbg_show)(struct seq_file *s,
 						struct gpio_chip *chip);
+#ifdef CONFIG_HTC_POWER_DEBUG
+	int			(*htc_gpio_dump)(struct seq_file *m, int curr_len, char *gpio_buffer);
+#endif
 	int			base;
 	u16			ngpio;
 	const char		*const *names;

@@ -1131,6 +1131,10 @@ extern struct usb_ep *usb_ep_autoconfig_by_name(struct usb_gadget *gadget,
 			struct usb_endpoint_descriptor *desc,
 			const char *ep_name);
 
+enum {
+	PROPERTY_CHG_STATUS = 0,
+};
+
 #ifdef CONFIG_USB_DWC3_MSM
 int msm_ep_config(struct usb_ep *ep, struct usb_request *request);
 int msm_ep_unconfig(struct usb_ep *ep);

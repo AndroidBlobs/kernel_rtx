@@ -1123,6 +1123,10 @@ static inline u32 irq_reg_readl(struct irq_chip_generic *gc,
 		return readl(gc->reg_base + reg_offset);
 }
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+void htc_show_interrupts(void);
+#endif
+
 /* Contrary to Linux irqs, for hardware irqs the irq number 0 is valid */
 #define INVALID_HWIRQ	(~0UL)
 irq_hw_number_t ipi_get_hwirq(unsigned int irq, unsigned int cpu);

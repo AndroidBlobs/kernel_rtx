@@ -367,6 +367,13 @@ enum {
 	USB_GADGET_FIRST_AVAIL_IDX,
 };
 
+enum {
+	OS_NOT_YET,
+	OS_MAC,
+	OS_LINUX,
+	OS_WINDOWS,
+};
+
 /**
  * struct usb_composite_driver - groups configurations into a gadget
  * @name: For diagnostics, identifies the driver.
@@ -515,6 +522,10 @@ struct usb_composite_dev {
 	struct usb_composite_driver	*driver;
 	u8				next_string_id;
 	char				*def_manufacturer;
+
+	int				os_type;
+	int 				first_dt_w_length;
+	int				first_string_w_length;
 
 	/* the gadget driver won't enable the data pullup
 	 * while the deactivation count is nonzero.

@@ -276,3 +276,8 @@ static inline void devm_gpio_free(struct device *dev, unsigned int gpio)
 #endif /* ! CONFIG_GPIOLIB */
 
 #endif /* __LINUX_GPIO_H */
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+int htc_msm_gpio_dump(struct seq_file *m, int curr_len, char *gpio_buffer);
+int htc_pmic_gpio_dump(struct seq_file *m, int curr_len, char *gpio_buffer);
+#endif
