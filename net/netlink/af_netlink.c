@@ -628,6 +628,19 @@ static int __netlink_create(struct net *net, struct socket *sock,
 
 	sk->sk_destruct = netlink_sock_destruct;
 	sk->sk_protocol = protocol;
+
+	{
+		int rc = 0;
+		int buf_size = SK_RMEM_MAX;
+		rc = kernel_setsockopt(sock, SOL_SOCKET, SO_RCVBUF,
+				       (char *)&buf_size, sizeof(buf_size));
+		if (rc) {
+			pr_err("%s: Can't set receive buffer %d: %d\n",
+			       __func__, buf_size, rc);
+			return rc;
+		}
+	}
+
 	return 0;
 }
 

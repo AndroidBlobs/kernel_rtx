@@ -87,3 +87,4 @@ endif
 obj-$(CONFIG_QRTR)		+= qrtr/
 obj-$(CONFIG_NET_NCSI)		+= ncsi/
 obj-$(CONFIG_RMNET_DATA) += rmnet_data/
+obj-$(CONFIG_HTC_NET_DEBUG)     += htc_net_debug.o
