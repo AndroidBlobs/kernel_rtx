@@ -1046,10 +1046,10 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 				SDE_POWER_EVENT_POST_DISABLE);
 	}
 
+	SDE_ATRACE_END("sde_power_resource_enable");
 end:
 	SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_EXIT);
 	mutex_unlock(&phandle->phandle_lock);
-	SDE_ATRACE_END("sde_power_resource_enable");
 	return rc;
 
 clk_err:
@@ -1063,8 +1063,8 @@ vreg_err:
 		sde_power_data_bus_update(&phandle->data_bus_handle[i], 0);
 data_bus_hdl_err:
 	phandle->current_usecase_ndx = prev_usecase_ndx;
-	mutex_unlock(&phandle->phandle_lock);
 	SDE_ATRACE_END("sde_power_resource_enable");
+	mutex_unlock(&phandle->phandle_lock);
 	return rc;
 }
 

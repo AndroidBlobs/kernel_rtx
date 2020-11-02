@@ -98,6 +98,12 @@ struct dsi_panel_phy_props {
 	enum dsi_panel_rotation rotation;
 };
 
+#define BL_MAP_MAX_SIZE 8
+#define BL_MAP_FIRST(x)  ( (x) & 0x0000ffff)
+#define BL_MAP_SECOND(x) (((x) & 0xffff0000) >> 16)
+#define BL_MAP_MAKE(first, second) ((first) | (second) << 16)
+#define BL_CALI_SCALE_DENOMINATOR 10000
+
 struct dsi_backlight_config {
 	enum dsi_backlight_type type;
 	enum bl_update_flag bl_update;
@@ -119,6 +125,13 @@ struct dsi_backlight_config {
 	/* WLED params */
 	struct led_trigger *wled;
 	struct backlight_device *raw_bd;
+
+	/* HTC: */
+	u32 bl_map[BL_MAP_MAX_SIZE];
+	size_t bl_map_size;
+
+	u32 bl_cali_scale;
+	bool bl_cali_en;
 };
 
 struct dsi_reset_seq {
@@ -204,6 +217,10 @@ struct dsi_panel {
 	enum dsi_dms_mode dms_mode;
 
 	bool sync_broadcast_en;
+
+	/* HTC: */
+	char gamma_cmdbuf[SZ_1K];
+	int gamma_cmdlen;
 };
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
@@ -310,5 +327,8 @@ struct dsi_panel *dsi_panel_ext_bridge_get(struct device *parent,
 int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel);
 
 void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
+
+int dsi_panel_update_gamma_fixup_cmds(struct dsi_panel *panel, char *cmdbuf, int len);
+int dsi_panel_send_gamma_fixup(struct dsi_panel *panel);
 
 #endif /* _DSI_PANEL_H_ */

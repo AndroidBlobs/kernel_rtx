@@ -275,6 +275,9 @@ struct dsi_display {
 	struct dsi_display_boot_param *boot_disp;
 
 	u32 te_source;
+
+	/* HTC: */
+	bool use_gamma_calibration;
 };
 
 int dsi_display_dev_probe(struct platform_device *pdev);

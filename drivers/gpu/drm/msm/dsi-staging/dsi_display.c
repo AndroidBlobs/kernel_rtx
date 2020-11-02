@@ -577,11 +577,8 @@ static bool dsi_display_validate_reg_read(struct dsi_panel *panel)
 	for (j = 0; j < config->groups; ++j) {
 		for (i = 0; i < len; ++i) {
 			if (config->return_buf[i] !=
-				config->status_value[group + i]) {
-				DRM_ERROR("mismatch: 0x%x\n",
-					  config->return_buf[i]);
+				config->status_value[group + i])
 				break;
-			}
 		}
 
 		if (i == len)
@@ -2380,9 +2377,7 @@ static int dsi_display_ctrl_init(struct dsi_display *display)
 	} else {
 		display_for_each_ctrl(i, display) {
 			ctrl = &display->ctrl[i];
-			rc = dsi_ctrl_update_host_state(ctrl->ctrl,
-							DSI_CTRL_OP_HOST_INIT,
-							true);
+			rc = dsi_ctrl_update_host_init_state(ctrl->ctrl, true);
 			if (rc)
 				pr_debug("host init update failed rc=%d\n", rc);
 		}
@@ -2466,25 +2461,6 @@ static int dsi_display_ctrl_host_disable(struct dsi_display *display)
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
 
 	m_ctrl = &display->ctrl[display->cmd_master_idx];
-	/*
-	 * For platforms where ULPS is controlled by DSI controller block,
-	 * do not disable dsi controller block if lanes are to be
-	 * kept in ULPS during suspend. So just update the SW state
-	 * and return early.
-	 */
-	if (display->panel->ulps_suspend_enabled &&
-	    !m_ctrl->phy->hw.ops.ulps_ops.ulps_request) {
-		display_for_each_ctrl(i, display) {
-			ctrl = &display->ctrl[i];
-			rc = dsi_ctrl_update_host_state(ctrl->ctrl,
-							DSI_CTRL_OP_HOST_ENGINE,
-							false);
-			if (rc)
-				pr_debug("host state update failed %d\n", rc);
-		}
-		return rc;
-	}
-
 	display_for_each_ctrl(i, display) {
 		ctrl = &display->ctrl[i];
 		if (!ctrl->ctrl || (ctrl == m_ctrl))
@@ -4777,6 +4753,246 @@ static struct attribute_group dynamic_dsi_clock_fs_attrs_group = {
 	.attrs = dynamic_dsi_clock_fs_attrs,
 };
 
+/* HTC: */
+#define BL_CALI_SCALE_MIN  8000
+#define BL_CALI_SCALE_MAX 12500
+#define BL_CALI_SCALE_VALID(x) (((x) >= BL_CALI_SCALE_MIN) && ((x) <= BL_CALI_SCALE_MAX))
+
+static int dsi_panel_reload_bl_cali_scale(struct dsi_panel *panel)
+{
+	const char fname[] = "/mnt/vendor/persist/display/bl_gain";
+	char *buf = NULL;
+	loff_t bufsz;
+	int rc, val;
+
+	rc = kernel_read_file_from_path(fname, (void **)&buf, &bufsz, PAGE_SIZE, 0);
+
+	if (rc) {
+		pr_err("Failed to read bl_gain. (%x)\n", rc);
+	} else {
+		if (sscanf(buf, "%d", &val) == 1) {
+			if (BL_CALI_SCALE_VALID(val)) {
+				panel->bl_config.bl_cali_scale = val;
+				panel->bl_config.bl_cali_en = true;
+			}
+		} else {
+			pr_err("Failed to load calibration value\n");
+			rc = -EINVAL;
+		}
+
+		vfree(buf);
+		buf = NULL;
+	}
+
+	return rc;
+}
+
+static ssize_t sysfs_bl_cali_scale_read(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct dsi_display *display;
+	struct dsi_backlight_config *bl;
+	int rc = 0;
+
+	display = dev_get_drvdata(dev);
+	if (display == NULL || display->panel == NULL)
+		return -EINVAL;
+
+	bl = &display->panel->bl_config;
+	rc = snprintf(buf, PAGE_SIZE, "%d %d\n", bl->bl_cali_en, bl->bl_cali_scale);
+
+	return rc;
+}
+
+static ssize_t sysfs_bl_cali_scale_write(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct dsi_display *display;
+
+	int rc = 0;
+	int opt, val;
+	bool changed = false;
+
+	display = dev_get_drvdata(dev);
+	if (display == NULL || display->panel == NULL)
+		return -EINVAL;
+
+	rc = sscanf(buf, "%d %d", &opt, &val);
+	if (rc >= 2 && opt == 1) {
+		if (BL_CALI_SCALE_VALID(val)) {
+			display->panel->bl_config.bl_cali_scale = val;
+			display->panel->bl_config.bl_cali_en = true;
+			changed = true;
+		}
+	} else if (rc >= 1) {
+		if (opt == 2) {
+			if (dsi_panel_reload_bl_cali_scale(display->panel) == 0)
+				changed = true;
+		} else if (opt == 0) {
+			display->panel->bl_config.bl_cali_en = false;
+			changed = true;
+		}
+	}
+
+	if (changed) {
+		struct backlight_device *bd;
+
+		bd = backlight_device_get_by_type(BACKLIGHT_PLATFORM);
+		if (bd) {
+			backlight_update_status(bd);
+		}
+		pr_info("Update bl_calibration = [%d, %d]\n", display->panel->bl_config.bl_cali_en, display->panel->bl_config.bl_cali_scale);
+	}
+
+	return count;
+}
+
+enum {
+	GAMMA_DATA_UNKNOWN = -1,
+	GAMMA_DATA_COMMON,
+	GAMMA_DATA_WHITEPT,
+	GAMMA_DATA_MAX,
+};
+
+struct gamma_data
+{
+	char buf[SZ_1K];
+	int size;
+};
+
+/* Return zero on success */
+static int dsi_panel_reload_gamma_fixup(struct dsi_panel *panel)
+{
+	const char fname[] = "/mnt/vendor/persist/display/gamma_fixup";
+	loff_t bufsz;
+	int rc, i;
+	char *buf, *buf_dup, *token;
+	const char *delim = " \t\r\n";
+	int type = GAMMA_DATA_UNKNOWN, len = 0, strtoint;
+	struct gamma_data *gamma = NULL;
+
+	rc = kernel_read_file_from_path(fname, (void **)&buf, &bufsz, PAGE_SIZE-1, 0);
+
+	if (rc) {
+		pr_err("Failed to read gamma_fixup. (%x)\n", rc);
+		return rc;
+	}
+
+	buf_dup = kmemdup_nul(buf, bufsz, GFP_KERNEL);
+	vfree(buf);
+	buf = buf_dup;
+
+	gamma = kzalloc(GAMMA_DATA_MAX * sizeof(struct gamma_data), GFP_KERNEL);
+	if (!gamma) {
+		vfree(buf_dup);
+		return -ENOMEM;
+	}
+
+	while ((token = strsep(&buf, delim)) != NULL) {
+		if (strcmp(token, "[whitept]")==0) {
+			if (type != GAMMA_DATA_UNKNOWN)
+				gamma[type].size = len;
+
+			type = GAMMA_DATA_WHITEPT;
+			len = 0;
+			continue;
+		}
+
+		if (token[0] == '\0')
+			continue;
+
+		if (type != GAMMA_DATA_UNKNOWN) {
+			rc = kstrtoint(token, 0, &strtoint);
+			if (rc) {
+				pr_err("input buffer conversion failed after [type%d, len=%d] %x\n", type, len, token[0]);
+				goto end;
+			}
+
+			if (len >= SZ_1K) {
+				pr_err("buffer size exceeding the limit %d\n", SZ_1K);
+				rc = -EINVAL;
+				goto end;
+			}
+			gamma[type].buf[len++] = (strtoint & 0xff);
+		}
+	}
+	if (type != GAMMA_DATA_UNKNOWN)
+		gamma[type].size = len;
+
+	for (i=0; i<GAMMA_DATA_MAX; i++) {
+		pr_info("GAMMA %d:\n", i);
+		print_hex_dump(KERN_INFO, "gamma: ", DUMP_PREFIX_OFFSET, 32, 1, gamma[i].buf, gamma[i].size, 0);
+	}
+	rc = dsi_panel_update_gamma_fixup_cmds(panel, gamma[GAMMA_DATA_WHITEPT].buf, gamma[GAMMA_DATA_WHITEPT].size);
+	if (!rc)
+		dsi_panel_send_gamma_fixup(panel);
+
+end:
+	kfree(gamma);
+	kfree(buf_dup);
+
+	if (rc)
+		pr_err("Failed to load calibration value\n");
+
+	return rc;
+}
+
+static ssize_t sysfs_gamma_calibration_read(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct dsi_display *display;
+	int rc = 0;
+
+	display = dev_get_drvdata(dev);
+	if (display == NULL || display->panel == NULL)
+		return -EINVAL;
+
+	rc = snprintf(buf, PAGE_SIZE, "%d\n", display->use_gamma_calibration);
+
+	return rc;
+}
+
+static ssize_t sysfs_gamma_calibration_write(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct dsi_display *display;
+	int rc = 0;
+	int opt;
+
+	display = dev_get_drvdata(dev);
+	if (display == NULL || display->panel == NULL)
+		return -EINVAL;
+
+	rc = sscanf(buf, "%d", &opt);
+	if (rc == 1) {
+		if (opt == 1) {
+			// Reserved: nop.
+		} else if (opt == 2) {
+			rc = dsi_panel_reload_gamma_fixup(display->panel);
+			display->use_gamma_calibration = (rc == 0) ? true : false;
+		} else if (opt == 0) {
+			display->use_gamma_calibration = false;
+			pr_info("Gamma calibration disabled\n");
+		}
+	}
+
+	return count;
+}
+
+
+static DEVICE_ATTR(bl_cali_scale, 0644, sysfs_bl_cali_scale_read, sysfs_bl_cali_scale_write);
+static DEVICE_ATTR(gamma_calibration, 0644, sysfs_gamma_calibration_read, sysfs_gamma_calibration_write);
+
+static struct attribute *dsi_panel_attrs[] = {
+	&dev_attr_bl_cali_scale.attr,
+	&dev_attr_gamma_calibration.attr,
+	NULL,
+};
+
+static struct attribute_group dsi_panel_attrs_group = {
+	.attrs = dsi_panel_attrs,
+};
+
 static int dsi_display_validate_split_link(struct dsi_display *display)
 {
 	int i, rc = 0;
@@ -4822,6 +5038,9 @@ static int dsi_display_sysfs_init(struct dsi_display *display)
 		rc = sysfs_create_group(&dev->kobj,
 			&dynamic_dsi_clock_fs_attrs_group);
 
+	if (!rc)
+		rc = sysfs_create_group(&dev->kobj, &dsi_panel_attrs_group);
+
 	return rc;
 
 }
@@ -4833,9 +5052,9 @@ static int dsi_display_sysfs_deinit(struct dsi_display *display)
 	if (display->panel->panel_mode == DSI_OP_CMD_MODE)
 		sysfs_remove_group(&dev->kobj,
 			&dynamic_dsi_clock_fs_attrs_group);
+	sysfs_remove_group(&dev->kobj, &dsi_panel_attrs_group);
 
 	return 0;
-
 }
 
 /**
@@ -7222,7 +7441,13 @@ int dsi_display_enable(struct dsi_display *display)
 		}
 
 		display->panel->panel_initialized = true;
-		pr_debug("cont splash enabled, display enable not required\n");
+		pr_info("cont splash enabled, display enable not required\n");
+
+		mutex_lock(&display->display_lock);
+		if (display->use_gamma_calibration)
+			dsi_panel_send_gamma_fixup(display->panel);
+		mutex_unlock(&display->display_lock);
+
 		return 0;
 	}
 
@@ -7244,6 +7469,9 @@ int dsi_display_enable(struct dsi_display *display)
 			       display->name, rc);
 			goto error;
 		}
+
+		if (display->use_gamma_calibration)
+			dsi_panel_send_gamma_fixup(display->panel);
 	}
 
 	if (mode->priv_info->dsc_enabled) {

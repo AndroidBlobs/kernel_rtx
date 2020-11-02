@@ -15,6 +15,7 @@
 #define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
 
 #include <linux/soc/qcom/fsa4480-i2c.h>
+#include <linux/soc/qcom/fsa3030.h>
 #include <linux/usb/usbpd.h>
 #include <linux/delay.h>
 
@@ -24,6 +25,11 @@
 
 enum {
 	DP_AUX_DATA_INDEX_WRITE = BIT(31),
+};
+
+enum dp_aux_switch_type {
+	AUX_SWITCH_TYPE_FSA4480,
+	AUX_SWITCH_TYPE_FSA3030,
 };
 
 struct dp_aux_private {
@@ -52,6 +58,9 @@ struct dp_aux_private {
 
 	u8 *dpcd;
 	u8 *edid;
+
+	/* HTC: */
+	enum dp_aux_switch_type switch_type;
 };
 
 #ifdef CONFIG_DYNAMIC_DEBUG
@@ -769,6 +778,7 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 	struct dp_aux_private *aux;
 	int rc = 0;
 	enum fsa_function event = FSA_USBC_DISPLAYPORT_DISCONNECTED;
+	enum fsa3030_function event2 = FSA3030_USBC_DEFAULT;
 
 	if (!dp_aux) {
 		pr_err("invalid input\n");
@@ -779,7 +789,7 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 	aux = container_of(dp_aux, struct dp_aux_private, dp_aux);
 
 	if (!aux->aux_switch_node) {
-		pr_debug("undefined fsa4480 handle\n");
+		pr_debug("undefined fsa4480/fsa3030 handle\n");
 		rc = -EINVAL;
 		goto end;
 	}
@@ -788,9 +798,11 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 		switch (orientation) {
 		case ORIENTATION_CC1:
 			event = FSA_USBC_ORIENTATION_CC1;
+			event2 = FSA3030_USBC_ORIENTATION_CC1;
 			break;
 		case ORIENTATION_CC2:
 			event = FSA_USBC_ORIENTATION_CC2;
+			event2 = FSA3030_USBC_ORIENTATION_CC2;
 			break;
 		default:
 			pr_err("invalid orientation\n");
@@ -799,12 +811,15 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 		}
 	}
 
-	pr_debug("enable=%d, orientation=%d, event=%d\n",
+	pr_info("enable=%d, orientation=%d, event=%d\n",
 			enable, orientation, event);
 
-	rc = fsa4480_switch_event(aux->aux_switch_node, event);
+	if (aux->switch_type == AUX_SWITCH_TYPE_FSA3030)
+		rc = fsa3030_switch_event(aux->aux_switch_node, event2);
+	else
+		rc = fsa4480_switch_event(aux->aux_switch_node, event);
 	if (rc)
-		pr_err("failed to configure fsa4480 i2c device (%d)\n", rc);
+		pr_err("failed to configure fsa switch device (%d)\n", rc);
 end:
 	return rc;
 }
@@ -842,6 +857,10 @@ struct dp_aux *dp_aux_get(struct device *dev, struct dp_catalog_aux *catalog,
 	dp_aux = &aux->dp_aux;
 	aux->retry_cnt = 0;
 	aux->dp_aux.reg = 0xFFFF;
+
+	aux->switch_type = AUX_SWITCH_TYPE_FSA4480;
+	if (strstr(aux_switch->name, "fsa3030"))
+		aux->switch_type = AUX_SWITCH_TYPE_FSA3030;
 
 	dp_aux->isr     = dp_aux_isr;
 	dp_aux->init    = dp_aux_init;

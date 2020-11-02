@@ -16,6 +16,7 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
+#include <linux/msm_drm_notify.h>
 #include <linux/of_gpio.h>
 #include <video/mipi_display.h>
 
@@ -351,6 +352,8 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 	int rc = 0;
 	struct dsi_panel_reset_config *r_config = &panel->reset_config;
 	int i;
+	struct msm_drm_notifier notifier_data;
+	int state;
 
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio)) {
 		rc = gpio_direction_output(panel->reset_config.disp_en_gpio, 1);
@@ -360,7 +363,11 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 		}
 	}
 
+	notifier_data.id = MSM_DRM_PRIMARY_DISPLAY;
+	notifier_data.data = &state;
 	if (r_config->count) {
+		state = r_config->sequence[0].level ? MSM_DRM_RESET_EARLY_HIGH : MSM_DRM_RESET_EARLY_LOW;
+		msm_drm_notifier_call_chain(MSM_DRM_EVENT_PANEL_RESET_TOGGLE, &notifier_data);
 		rc = gpio_direction_output(r_config->reset_gpio,
 			r_config->sequence[0].level);
 		if (rc) {
@@ -370,9 +377,15 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 	}
 
 	for (i = 0; i < r_config->count; i++) {
+		if (i != 0) {
+			state = r_config->sequence[i].level ? MSM_DRM_RESET_EARLY_HIGH : MSM_DRM_RESET_EARLY_LOW;
+			msm_drm_notifier_call_chain(MSM_DRM_EVENT_PANEL_RESET_TOGGLE, &notifier_data);
+		}
 		gpio_set_value(r_config->reset_gpio,
 			       r_config->sequence[i].level);
 
+		state = r_config->sequence[i].level ? MSM_DRM_RESET_HIGH : MSM_DRM_RESET_LOW;
+		msm_drm_notifier_call_chain(MSM_DRM_EVENT_PANEL_RESET_TOGGLE, &notifier_data);
 
 		if (r_config->sequence[i].sleep_ms)
 			usleep_range(r_config->sequence[i].sleep_ms * 1000,
@@ -472,12 +485,24 @@ exit:
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
+	struct msm_drm_notifier notifier_data;
+	int state;
 
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.reset_gpio))
+	if (gpio_is_valid(panel->reset_config.reset_gpio)) {
+		notifier_data.id = MSM_DRM_PRIMARY_DISPLAY;
+		notifier_data.data = &state;
+
+		state = MSM_DRM_RESET_EARLY_LOW;
+		msm_drm_notifier_call_chain(MSM_DRM_EVENT_PANEL_RESET_TOGGLE, &notifier_data);
+
 		gpio_set_value(panel->reset_config.reset_gpio, 0);
+
+		state = MSM_DRM_RESET_LOW;
+		msm_drm_notifier_call_chain(MSM_DRM_EVENT_PANEL_RESET_TOGGLE, &notifier_data);
+	}
 
 	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
 		gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
@@ -1563,6 +1588,7 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command",
 	"qcom,mdss-dsi-qsync-on-commands",
 	"qcom,mdss-dsi-qsync-off-commands",
+	"GAMMA FIXUP not parsed from DTSI, load from file",
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
@@ -1589,6 +1615,7 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
 	"qcom,mdss-dsi-qsync-on-commands-state",
 	"qcom,mdss-dsi-qsync-off-commands-state",
+	"GAMMA FIXUP not parsed from DTSI, load from file",
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -2074,6 +2101,42 @@ error:
 	return rc;
 }
 
+static int dsi_panel_parse_bl_map(struct dsi_panel *panel)
+{
+	int rc = 0;
+	int i;
+	u32 length = 0;
+	u32 arr32[2 * BL_MAP_MAX_SIZE];
+	struct dsi_parser_utils *utils = &panel->utils;
+	struct dsi_backlight_config *bl = &panel->bl_config;
+
+	bl->bl_map_size = 0;
+	bl->bl_cali_scale = 10000;
+	bl->bl_cali_en = false;
+
+	length = utils->count_u32_elems(utils->data, "htc,brt-bl-table");
+	if (length & 0x1 || length > 2 * BL_MAP_MAX_SIZE) {
+		pr_err("[%s] syntax error for bl map\n",
+		       panel->name);
+		rc = -EINVAL;
+		goto error;
+	}
+
+	rc = utils->read_u32_array(utils->data, "htc,brt-bl-table", arr32, length);
+	if (rc) {
+		pr_err("[%s] cannot read bl map\n", panel->name);
+		goto error;
+	}
+	bl->bl_map_size = length / 2;
+	for (i = 0; i < bl->bl_map_size; i++) {
+		bl->bl_map[i] = BL_MAP_MAKE(arr32[2*i], arr32[2*i+1]);
+		pr_info("[%d]: %08x, (%4d, %4d)\n", i, bl->bl_map[i], BL_MAP_FIRST(bl->bl_map[i]), BL_MAP_SECOND(bl->bl_map[i]));
+	}
+
+error:
+	return rc;
+}
+
 static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 {
 	int rc = 0;
@@ -2162,8 +2225,9 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 	if (!gpio_is_valid(panel->bl_config.en_gpio)) {
 		pr_debug("[%s] failed get bklt gpio, rc=%d\n", panel->name, rc);
 		rc = 0;
-		goto error;
 	}
+
+	dsi_panel_parse_bl_map(panel);
 
 error:
 	return rc;
@@ -3560,14 +3624,10 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	if (!panel->panel_initialized)
-		goto exit;
-
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
-exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -3582,14 +3642,10 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	if (!panel->panel_initialized)
-		goto exit;
-
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
-exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -3604,14 +3660,10 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	if (!panel->panel_initialized)
-		goto exit;
-
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
-exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -3860,11 +3912,11 @@ int dsi_panel_enable(struct dsi_panel *panel)
 	mutex_lock(&panel->panel_lock);
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
-	if (rc)
+	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
 		       panel->name, rc);
-	else
-		panel->panel_initialized = true;
+	}
+	panel->panel_initialized = true;
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -3886,6 +3938,7 @@ int dsi_panel_post_enable(struct dsi_panel *panel)
 		       panel->name, rc);
 		goto error;
 	}
+
 error:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -3989,4 +4042,95 @@ int dsi_panel_post_unprepare(struct dsi_panel *panel)
 error:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
+}
+
+/* HTC: */
+static int dsi_panel_create_gamma_fixup_packet(struct dsi_panel *panel)
+{
+	struct dsi_panel_cmd_set *set;
+	u32 packet_count = 0;
+	int rc = 0;
+
+	pr_info("Create new fixup packet\n");
+	if (!panel || !panel->cur_mode) {
+		pr_err("Invalid params\n");
+
+		return -EINVAL;
+	}
+
+	rc = dsi_panel_get_cmd_pkt_count(panel->gamma_cmdbuf, panel->gamma_cmdlen, &packet_count);
+	if (rc) {
+		pr_err("commands failed, rc=%d\n", rc);
+		goto done;
+	}
+
+	// TBD: for mode change was not support yet.
+	set = &panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_GAMMA_FIXUP];
+
+	if (set->cmds) {
+		dsi_panel_destroy_cmd_packets(set);
+		dsi_panel_dealloc_cmd_packets(set);
+		set->cmds = NULL;
+	}
+
+	rc = dsi_panel_alloc_cmd_packets(set, packet_count);
+	if (rc) {
+		pr_err("failed to allocate cmd packets, rc=%d\n", rc);
+		goto done;
+	}
+	set->state = DSI_CMD_SET_STATE_LP;
+
+	rc = dsi_panel_create_cmd_packets(panel->gamma_cmdbuf, panel->gamma_cmdlen,  packet_count, set->cmds);
+	if (rc) {
+		pr_err("failed to create cmd packets, rc=%d\n", rc);
+		dsi_panel_dealloc_cmd_packets(set);
+		set->cmds = NULL;
+	}
+
+done:
+	panel->gamma_cmdlen = 0;
+	return rc;
+}
+
+int dsi_panel_update_gamma_fixup_cmds(struct dsi_panel *panel, char *cmdbuf, int len)
+{
+	u32 packet_count = 0;
+	int rc = 0;
+
+	if (!panel || !cmdbuf || !len) {
+		pr_err("Invalid params\n");
+		return -EINVAL;
+	}
+
+	rc = dsi_panel_get_cmd_pkt_count(cmdbuf, len, &packet_count);
+	if (rc) {
+		pr_err("commands failed, rc=%d\n", rc);
+		return rc;
+	}
+
+	mutex_lock(&panel->panel_lock);
+	memcpy(panel->gamma_cmdbuf, cmdbuf, len);
+	panel->gamma_cmdlen = len;
+	mutex_unlock(&panel->panel_lock);
+
+	return 0;
+}
+
+int dsi_panel_send_gamma_fixup(struct dsi_panel *panel)
+{
+	int rc = 0;
+
+	mutex_lock(&panel->panel_lock);
+	if (panel->gamma_cmdlen) {
+		rc = dsi_panel_create_gamma_fixup_packet(panel);
+	}
+
+	if (!rc && panel->panel_initialized) {
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_GAMMA_FIXUP);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_GAMMA_FIXUP cmds, rc=%d\n", panel->name, rc);
+		}
+	}
+	mutex_unlock(&panel->panel_lock);
+	return 0;
 }
