@@ -271,13 +271,18 @@ static int msg_read(struct ipc_log_context *ilctxt,
  *
  * @ilctxt	Logging context
  */
-static void msg_drop(struct ipc_log_context *ilctxt)
+static int msg_drop(struct ipc_log_context *ilctxt)
 {
 	struct tsv_header hdr;
 
 	if (!is_read_empty(ilctxt)) {
 		ipc_log_drop(ilctxt, &hdr, sizeof(hdr));
 		ipc_log_drop(ilctxt, NULL, (int)hdr.size);
+
+		return 1;
+	} else {
+		pr_err("%s: msg_drop enter, but ilctxt is already empty\n", __func__);
+		return 0;
 	}
 }
 
@@ -290,6 +295,7 @@ void ipc_log_write(void *ctxt, struct encode_context *ectxt)
 	struct ipc_log_context *ilctxt = (struct ipc_log_context *)ctxt;
 	int bytes_to_write;
 	unsigned long flags;
+	int ret = 0;
 
 	if (!ilctxt || !ectxt) {
 		pr_err("%s: Invalid ipc_log or encode context\n", __func__);
@@ -298,8 +304,12 @@ void ipc_log_write(void *ctxt, struct encode_context *ectxt)
 
 	read_lock_irqsave(&context_list_lock_lha1, flags);
 	spin_lock(&ilctxt->context_lock_lhb1);
-	while (ilctxt->write_avail <= ectxt->offset)
-		msg_drop(ilctxt);
+	while (ilctxt->write_avail <= ectxt->offset) {
+		ret = msg_drop(ilctxt);
+		if (!ret) {
+			break;
+		}
+	}
 
 	bytes_to_write = MIN(LOG_PAGE_DATA_SIZE
 				- ilctxt->write_page->hdr.write_offset,

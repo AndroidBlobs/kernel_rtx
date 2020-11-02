@@ -130,6 +130,7 @@ static int __maybe_unused four = 4;
 static unsigned long one_ul = 1;
 static int one_hundred = 100;
 static int one_thousand = 1000;
+static int max_swappiness = 200;
 #ifdef CONFIG_SCHED_WALT
 static int two_million = 2000000;
 #endif
@@ -594,6 +595,15 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= LIB_PATH_LENGTH,
 		.mode		= 0644,
 		.proc_handler	= proc_dostring,
+	},
+	{
+		.procname	= "sched_lib_mask_check",
+		.data		= &sched_lib_mask_check,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two_hundred_fifty_five,
 	},
 	{
 		.procname	= "sched_lib_mask_force",
@@ -1517,7 +1527,16 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-		.extra2		= &one_hundred,
+		.extra2		= &max_swappiness,
+	},
+	{
+		.procname	= "inactive_ratio",
+		.data		= &vm_inactive_ratio,
+		.maxlen 	= sizeof(vm_inactive_ratio),
+		.mode		= 0644,
+		.proc_handler	= vm_inactive_ratio_handler,
+		.extra1 	= &one,
+		.extra2 	= &one_hundred,
 	},
 	{
 		.procname       = "want_old_faultaround_pte",

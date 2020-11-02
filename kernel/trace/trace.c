@@ -7585,6 +7585,49 @@ static const struct file_operations rb_simple_fops = {
 	.llseek		= default_llseek,
 };
 
+static int trace_trigger = 0;
+
+static ssize_t
+tracing_trigger_read(struct file *filp, char __user *ubuf,
+	       size_t cnt, loff_t *ppos)
+{
+	char buf[64];
+	int r;
+
+	r = sprintf(buf, "%d\n", trace_trigger);
+
+	return simple_read_from_buffer(ubuf, cnt, ppos, buf, r);
+}
+
+static ssize_t
+tracing_trigger_write(struct file *filp, const char __user *ubuf,
+		size_t cnt, loff_t *ppos)
+{
+	unsigned long val;
+	int ret;
+
+	ret = kstrtoul_from_user(ubuf, cnt, 10, &val);
+	if (ret)
+		return ret;
+
+	mutex_lock(&trace_types_lock);
+	trace_trigger = val;
+	mutex_unlock(&trace_types_lock);
+
+	(*ppos)++;
+
+	return cnt;
+}
+
+static const struct file_operations tracing_trigger_fops = {
+	.open		= tracing_open_generic_tr,
+	.read		= tracing_trigger_read,
+	.write		= tracing_trigger_write,
+	.release	= tracing_release_generic_tr,
+	.llseek		= default_llseek,
+};
+
+
 struct dentry *trace_instance_dir;
 
 static void
@@ -7876,6 +7919,9 @@ init_tracer_tracefs(struct trace_array *tr, struct dentry *d_tracer)
 
 	trace_create_file("tracing_on", 0644, d_tracer,
 			  tr, &rb_simple_fops);
+
+	trace_create_file("trace_trigger", 0644, d_tracer,
+			  tr, &tracing_trigger_fops);
 
 	create_trace_options_dir(tr);
 

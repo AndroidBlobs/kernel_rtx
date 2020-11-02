@@ -132,6 +132,9 @@ static DEFINE_MUTEX(cpuhp_state_mutex);
 static struct cpuhp_step cpuhp_bp_states[];
 static struct cpuhp_step cpuhp_ap_states[];
 
+extern int have_cpu_mask;
+extern struct cpumask cpu_mask;
+
 static bool cpuhp_is_ap_state(enum cpuhp_state state)
 {
 	/*
@@ -1189,6 +1192,9 @@ static int do_cpu_up(unsigned int cpu, enum cpuhp_state target)
 {
 	int err = 0;
 	int switch_err = 0;
+
+	if(unlikely(have_cpu_mask) && cpumask_test_cpu(cpu, &cpu_mask))
+		return -EACCES;
 
 	if (!cpu_possible(cpu)) {
 		pr_err("can't online cpu %d because it is not configured as may-hotadd at boot time\n",

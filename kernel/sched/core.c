@@ -4899,8 +4899,9 @@ out_put_task:
 }
 
 char sched_lib_name[LIB_PATH_LENGTH];
+unsigned int sched_lib_mask_check;
 unsigned int sched_lib_mask_force;
-bool is_sched_lib_based_app(pid_t pid)
+static inline bool is_sched_lib_based_app(pid_t pid)
 {
 	const char *name = NULL;
 	struct vm_area_struct *vma;
@@ -4952,6 +4953,19 @@ put_task_struct:
 	return found;
 }
 
+long msm_sched_setaffinity(pid_t pid, struct cpumask *new_mask)
+{
+	if (sched_lib_mask_check != 0 && sched_lib_mask_force != 0 &&
+		(cpumask_bits(new_mask)[0] == sched_lib_mask_check) &&
+		is_sched_lib_based_app(pid)) {
+
+		cpumask_t forced_mask = { {sched_lib_mask_force} };
+
+		cpumask_copy(new_mask, &forced_mask);
+	}
+	return sched_setaffinity(pid, new_mask);
+}
+
 static int get_user_cpu_mask(unsigned long __user *user_mask_ptr, unsigned len,
 			     struct cpumask *new_mask)
 {
@@ -4982,7 +4996,7 @@ SYSCALL_DEFINE3(sched_setaffinity, pid_t, pid, unsigned int, len,
 
 	retval = get_user_cpu_mask(user_mask_ptr, len, new_mask);
 	if (retval == 0)
-		retval = sched_setaffinity(pid, new_mask);
+		retval = msm_sched_setaffinity(pid, new_mask);
 	free_cpumask_var(new_mask);
 	return retval;
 }
@@ -5398,11 +5412,12 @@ void sched_show_task(struct task_struct *p)
 {
 	unsigned long free = 0;
 	int ppid;
+	struct task_struct *group_leader;
 
 	if (!try_get_task_stack(p))
 		return;
 
-	printk(KERN_INFO "%-15.15s %c", p->comm, task_state_to_char(p));
+	printk(KERN_INFO "%-15.15s state:%c(0x%08lx) ", p->comm, task_state_to_char(p), p->state);
 
 	if (p->state == TASK_RUNNING)
 		printk(KERN_CONT "  running task    ");
@@ -5414,9 +5429,32 @@ void sched_show_task(struct task_struct *p)
 	if (pid_alive(p))
 		ppid = task_pid_nr(rcu_dereference(p->real_parent));
 	rcu_read_unlock();
-	printk(KERN_CONT "%5lu %5d %6d 0x%08lx\n", free,
+	printk(KERN_CONT "free stack:%5lu pid:%5d ppid:%6d flags:0x%08lx cpu:%d last arrival till now:%llu\n", free,
 		task_pid_nr(p), ppid,
-		(unsigned long)task_thread_info(p)->flags);
+		(unsigned long)task_thread_info(p)->flags, p->on_cpu,
+#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
+		div64_u64(task_rq(p)->clock - p->sched_info.last_arrival, NSEC_PER_MSEC));
+#else
+		(unsigned long long)0);
+#endif
+
+	group_leader = p->group_leader;
+	printk(KERN_CONT "  tgid: %d, group leader: %s\n",
+			p->tgid, group_leader ? group_leader->comm : "unknown");
+
+#if defined(CONFIG_DEBUG_MUTEXES)
+	if (p->state == TASK_UNINTERRUPTIBLE) {
+		struct task_struct* blocker = p->blocked_by;
+		if (blocker) {
+			/* The content of 'blocker' here might be invalid if
+			 * the previous locker exits imediately after unlock.
+			 */
+			printk(KERN_CONT " blocked by %.32s (%d:%d) for %u ms\n",
+				blocker->comm, blocker->tgid, blocker->pid,
+				jiffies_to_msecs(jiffies - p->blocked_since));
+		}
+	}
+#endif
 
 	print_worker_info(KERN_INFO, p);
 	show_stack(p, NULL);
@@ -5447,6 +5485,11 @@ state_filter_match(unsigned long state_filter, struct task_struct *p)
 
 void show_state_filter(unsigned long state_filter)
 {
+	show_thread_group_state_filter(NULL, state_filter);
+}
+
+void show_thread_group_state_filter(const char *tg_comm, unsigned long state_filter)
+{
 	struct task_struct *g, *p;
 
 #if BITS_PER_LONG == 32
@@ -5467,12 +5510,14 @@ void show_state_filter(unsigned long state_filter)
 		 */
 		touch_nmi_watchdog();
 		touch_all_softlockup_watchdogs();
-		if (state_filter_match(state_filter, p))
-			sched_show_task(p);
+		if (!tg_comm || (tg_comm && !strncmp(tg_comm, g->comm, TASK_COMM_LEN))) {
+			if (state_filter_match(state_filter, p))
+				sched_show_task(p);
+		}
 	}
 
 #ifdef CONFIG_SCHED_DEBUG
-	if (!state_filter)
+	if (!state_filter && !tg_comm)
 		sysrq_sched_debug_show();
 #endif
 	rcu_read_unlock();

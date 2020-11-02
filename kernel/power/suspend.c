@@ -606,16 +606,43 @@ static int enter_state(suspend_state_t state)
 	return error;
 }
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+struct timespec suspend_duration_ts;
+struct rtc_time suspend_duration_tm;
+#endif
+
 static void pm_suspend_marker(char *annotation)
 {
 	struct timespec ts;
 	struct rtc_time tm;
+#ifdef CONFIG_HTC_POWER_DEBUG
+    long nsec_diff = 0;
+    int sec_diff = 0, min_diff = 0;
+#endif
 
 	getnstimeofday(&ts);
 	rtc_time_to_tm(ts.tv_sec, &tm);
 	pr_info("PM: suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
 		annotation, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
+#ifdef CONFIG_HTC_POWER_DEBUG
+    if(strcmp ("exit", annotation)) { //entry
+        suspend_duration_tm.tm_hour = tm.tm_hour;
+        suspend_duration_tm.tm_min = tm.tm_min;
+        suspend_duration_tm.tm_sec = tm.tm_sec;
+        suspend_duration_ts.tv_nsec = ts.tv_nsec;
+    } else {
+        nsec_diff = ts.tv_nsec - suspend_duration_ts.tv_nsec;
+        if(nsec_diff < 0) { nsec_diff+=1000; tm.tm_sec--; }
+        sec_diff = tm.tm_sec - suspend_duration_tm.tm_sec;
+        if(sec_diff < 0) { sec_diff+=60; tm.tm_min--; }
+        min_diff = tm.tm_min - suspend_duration_tm.tm_min;
+        if(min_diff < 0) { min_diff+=60; tm.tm_hour--; }
+        pr_info("PM: duration from suspend to resume: %02d:%02d:%02d.%09lu",
+                tm.tm_hour-suspend_duration_tm.tm_hour,
+                min_diff, sec_diff, nsec_diff);
+    }
+#endif
 }
 
 /**
@@ -628,12 +655,19 @@ static void pm_suspend_marker(char *annotation)
 int pm_suspend(suspend_state_t state)
 {
 	int error;
-
+#ifdef CONFIG_HTC_POWER_DEBUG
+    char stats[16]={'\0'};
+#endif
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+    sprintf(stats, "%s(%s)", "entry", mem_sleep_labels[state]);
+    pm_suspend_marker(stats);
+#else
 	pm_suspend_marker("entry");
 	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
+#endif
 	error = enter_state(state);
 	if (error) {
 		suspend_stats.fail++;
@@ -641,8 +675,13 @@ int pm_suspend(suspend_state_t state)
 	} else {
 		suspend_stats.success++;
 	}
+#ifdef CONFIG_HTC_POWER_DEBUG
+    sprintf(stats, "%s%c", "exit",'\0');
+    pm_suspend_marker(stats);
+#else
 	pm_suspend_marker("exit");
 	pr_info("suspend exit\n");
+#endif
 	return error;
 }
 EXPORT_SYMBOL(pm_suspend);
