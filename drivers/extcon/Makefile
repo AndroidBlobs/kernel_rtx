@@ -22,3 +22,6 @@ obj-$(CONFIG_EXTCON_RT8973A)	+= extcon-rt8973a.o
 obj-$(CONFIG_EXTCON_SM5502)	+= extcon-sm5502.o
 obj-$(CONFIG_EXTCON_USB_GPIO)	+= extcon-usb-gpio.o
 obj-$(CONFIG_EXTCON_USBC_CROS_EC) += extcon-usbc-cros-ec.o
+# HTC_AUD_START - HPKB:2469|HPKB:240|HPKB:6799
+obj-$(CONFIG_EXTCON_HTC_MISC)   += extcon-htc-misc.o
+# HTC_AUD_END - HPKB:2469|HPKB:240|HPKB:6799

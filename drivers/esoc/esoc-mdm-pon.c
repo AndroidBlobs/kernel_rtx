@@ -141,6 +141,10 @@ static int mdm9x55_power_down(struct mdm_ctrl *mdm)
 	return 0;
 }
 
+//Modem_BSP++
+extern int is_boot_fail;
+//Modem_BSP--
+
 static int sdx50m_power_down(struct mdm_ctrl *mdm)
 {
 	struct device *dev = mdm->dev;
@@ -158,6 +162,14 @@ static int sdx50m_power_down(struct mdm_ctrl *mdm)
 	 * for the reset to fully take place. Sleep here to ensure the
 	 * reset has occurred before the function exits.
 	 */
+//Modem_BSP++
+	if (is_boot_fail==1) {
+		esoc_mdm_log("sdx50m_power_down: sleep 3s\n");
+		msleep(3000);
+	}
+	else
+//Modem_BSP--
+
 	msleep(300);
 	return 0;
 }

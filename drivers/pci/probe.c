@@ -546,7 +546,7 @@ struct pci_host_bridge *devm_pci_alloc_host_bridge(struct device *dev,
 {
 	struct pci_host_bridge *bridge;
 
-	bridge = devm_kzalloc(dev, sizeof(*bridge) + priv, GFP_KERNEL);
+	bridge = devm_kzalloc(dev, sizeof(*bridge) + priv, GFP_KERNEL | ___GFP_NOFAIL);
 	if (!bridge)
 		return NULL;
 

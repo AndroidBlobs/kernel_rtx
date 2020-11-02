@@ -188,3 +188,12 @@ obj-$(CONFIG_TEE)		+= tee/
 obj-$(CONFIG_MULTIPLEXER)	+= mux/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 obj-$(CONFIG_ESOC)              += esoc/
+
+#HTC Debug Footprint
+obj-$(CONFIG_HTC_DEBUG_FOOTPRINT)      += htc_mnemosyne/
+
+# HTC debug
+obj-$(CONFIG_HTC_DEBUG)   += htc_debug/
+
+# HTC Modem_BSP
+obj-$(CONFIG_HTC_RADIO_SMEM)    += htc_radio/

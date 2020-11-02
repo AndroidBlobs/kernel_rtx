@@ -18,9 +18,14 @@
 #include "esoc.h"
 #include "esoc-mdm.h"
 #include "mdm-dbg.h"
+//Modem_BSP++
+#include <linux/htc_flags.h>
+//Modem_BSP--
 
 /* Default number of powerup trial requests per session */
-#define ESOC_DEF_PON_REQ	2
+//Modem_BSP++
+#define ESOC_DEF_PON_REQ	10
+//Modem_BSP--
 static unsigned int n_pon_tries = ESOC_DEF_PON_REQ;
 module_param(n_pon_tries, uint, 0644);
 MODULE_PARM_DESC(n_pon_tries,
@@ -35,6 +40,74 @@ enum esoc_boot_fail_action {
 };
 
 static unsigned int boot_fail_action = BOOT_FAIL_ACTION_PANIC;
+
+//Modem_BSP++
+int is_first_boot=1;
+int boot_fail_times=0;
+#define DEVICE_TREE_RADIO_PATH "/chosen/radio"
+
+static void mdm_boot_fail_action(void)
+{
+	struct device_node *dnp;
+	uint32_t val,val_2;
+
+	dnp = of_find_node_by_path(DEVICE_TREE_RADIO_PATH);
+
+	if(dnp) {
+		of_property_read_u32(dnp, "htc_smem_radio_dbg_flag_ext1", &val);
+		of_property_read_u32(dnp, "htc_smem_radio_dbg_flag", &val_2);
+
+		if(val_2 & BIT(3)) {
+			//8 0x08
+
+			if(val & BIT(6)) {
+				//A 0x40
+				boot_fail_action = BOOT_FAIL_ACTION_NOP;
+				esoc_mdm_log("mdm_boot_fail_action: BOOT_FAIL_ACTION_NOP\n");
+			}
+			else if(val & BIT(13)) {
+				//A 0x2000
+				boot_fail_action = BOOT_FAIL_ACTION_RETRY;
+				esoc_mdm_log("mdm_boot_fail_action: BOOT_FAIL_ACTION_RETRY\n");
+			}
+			else if(val & BIT(14)) {
+				//A 0x4000
+				boot_fail_action = BOOT_FAIL_ACTION_COLD_RESET;
+				esoc_mdm_log("mdm_boot_fail_action: BOOT_FAIL_ACTION_COLD_RESET\n");
+			}
+			else if(val & BIT(15)) {
+				//A 0x8000
+				boot_fail_action = BOOT_FAIL_ACTION_PANIC;
+				esoc_mdm_log("mdm_boot_fail_action: BOOT_FAIL_ACTION_PANIC\n");
+			}
+			else{
+				if(is_first_boot==1){
+					boot_fail_action = BOOT_FAIL_ACTION_COLD_RESET;
+					esoc_mdm_log("is_first_boot=1, mdm_boot_fail_action: BOOT_FAIL_ACTION_COLD_RESET\n");
+					is_first_boot=0;
+				}
+				else if(is_first_boot==0){
+					boot_fail_action = BOOT_FAIL_ACTION_PANIC;
+					esoc_mdm_log("is_first_boot=0, mdm_boot_fail_action: BOOT_FAIL_ACTION_PANIC\n");
+				}
+			}
+		}
+		else{
+			boot_fail_times++;
+			if(boot_fail_times < ESOC_DEF_PON_REQ){
+				boot_fail_action = BOOT_FAIL_ACTION_COLD_RESET;
+				esoc_mdm_log("boot_fail_times=%d, mdm_boot_fail_action: BOOT_FAIL_ACTION_COLD_RESET\n",boot_fail_times);
+			}
+			else{
+				boot_fail_action = BOOT_FAIL_ACTION_PANIC;
+				esoc_mdm_log("boot_fail_times=%d, mdm_boot_fail_action: BOOT_FAIL_ACTION_PANIC\n",boot_fail_times);
+			}
+		}
+	} else
+		pr_err("[esoc]%s: cannot find path %s.\n", __func__, DEVICE_TREE_RADIO_PATH);
+}
+//Modem_BSP--
+
 module_param(boot_fail_action, uint, 0644);
 MODULE_PARM_DESC(boot_fail_action,
 "Actions: 0:Retry PON; 1:Cold reset; 2:Power-down; 3:APQ Panic; 4:No action");
@@ -122,6 +195,10 @@ static void mdm_handle_clink_evt(enum esoc_evt evt,
 		mdm_drv->pon_state = PON_SUCCESS;
 		mdm_drv->mode = RUN,
 		complete(&mdm_drv->pon_done);
+		//Modem_BSP++
+		is_first_boot=0;
+		boot_fail_times=0;
+		//Modem_BSP--
 		break;
 	case ESOC_RETRY_PON_EVT:
 		esoc_mdm_log(
@@ -319,10 +396,18 @@ static void mdm_subsys_retry_powerup_cleanup(struct esoc_clink *esoc_clink)
 	reinit_completion(&mdm_drv->req_eng_wait);
 }
 
+//Modem_BSP++
+int is_boot_fail=0;
+//Modem_BSP--
+
 /* Returns 0 to proceed towards another retry, or an error code to quit */
 static int mdm_handle_boot_fail(struct esoc_clink *esoc_clink, u8 *pon_trial)
 {
 	struct mdm_ctrl *mdm = get_esoc_clink_data(esoc_clink);
+
+	//Modem BSP++
+	mdm_boot_fail_action();
+	//Modem BSP--
 
 	switch (boot_fail_action) {
 	case BOOT_FAIL_ACTION_RETRY:
@@ -339,7 +424,13 @@ static int mdm_handle_boot_fail(struct esoc_clink *esoc_clink, u8 *pon_trial)
 		mdm_subsys_retry_powerup_cleanup(esoc_clink);
 		esoc_mdm_log("Doing cold reset by power-down and warm reset\n");
 		(*pon_trial)++;
+		//Modem_BSP++
+		is_boot_fail=1;
+		//Modem_BSP--
 		mdm_power_down(mdm);
+		//Modem_BSP++
+		is_boot_fail=0;
+		//Modem_BSP--
 		break;
 	case BOOT_FAIL_ACTION_PANIC:
 		esoc_mdm_log("Calling panic!!\n");
@@ -486,6 +577,10 @@ int esoc_ssr_probe(struct esoc_clink *esoc_clink, struct esoc_drv *drv)
 	int ret;
 	struct mdm_drv *mdm_drv;
 	struct esoc_eng *esoc_eng;
+	//Modem_BSP++
+	struct mdm_ctrl *mdm = get_esoc_clink_data(esoc_clink);
+	unsigned int abnrst_flag = get_abnrst_flag();
+	//Modem_BSP--
 
 	mdm_drv = devm_kzalloc(&esoc_clink->dev, sizeof(*mdm_drv), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(mdm_drv))
@@ -525,6 +620,15 @@ int esoc_ssr_probe(struct esoc_clink *esoc_clink, struct esoc_drv *drv)
 		dev_dbg(&esoc_clink->dev, "dbg engine initialized\n");
 		debug_init_done = true;
 	}
+
+	//Modem_BSP++
+	esoc_mdm_log("abnrst = %d\n" , abnrst_flag);
+	if(abnrst_flag==0 && gpio_get_value(MDM_GPIO(mdm, AP2MDM_SOFT_RESET))==1)
+	{
+		gpio_direction_output(MDM_GPIO(mdm, AP2MDM_SOFT_RESET),0);
+		esoc_mdm_log("Pull down AP2MDM_SOFT_RESET gpio\n");
+	}
+	//Modem_BSP--
 
 	return 0;
 queue_err:

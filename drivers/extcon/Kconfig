@@ -157,4 +157,11 @@ config EXTCON_USBC_CROS_EC
 	  Say Y here to enable USB Type C cable detection extcon support when
 	  using Chrome OS EC based USB Type-C ports.
 
+# HTC_AUD_START - HPKB:2469|HPKB:240|HPKB:6799
+config EXTCON_HTC_MISC
+	tristate "HTC MISC extcon support"
+	help
+	  Say Y here to enable HTC MISC virtual cable detection
+# HTC_AUD_END - HPKB:2469|HPKB:240|HPKB:6799
+
 endif

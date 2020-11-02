@@ -29,6 +29,7 @@
 #include "wil_platform.h"
 #include "ftm.h"
 #include "fw.h"
+#include <linux/thermal.h>
 
 extern bool no_fw_recovery;
 extern unsigned int mtu_max;
@@ -1077,6 +1078,9 @@ struct wil6210_priv {
 	struct wil_fw_stats_global fw_stats_global;
 
 	struct work_struct pci_linkdown_recovery_worker;
+
+	/* Thermal */
+	struct completion thermal_fw_ready;
 };
 
 #define wil_to_wiphy(i) (i->wiphy)

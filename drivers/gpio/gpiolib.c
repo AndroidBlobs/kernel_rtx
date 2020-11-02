@@ -3768,11 +3768,68 @@ static const struct file_operations gpiolib_operations = {
 	.release	= seq_release,
 };
 
+
+// [TODO]
+// for now, we can only dump NO.99~175 pins
+// if will crashed cause by dump NO.0~99 pins
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+static struct dentry *debugfs_base;
+
+static int list_gpios_show(struct seq_file *s, void *v)
+{
+    struct gpio_device *gdev = v;
+    struct gpio_chip *chip = gdev->chip;
+    unsigned long flags;
+
+    spin_lock_irqsave(&gpio_lock, flags);
+
+    if (chip->htc_gpio_dump){
+        htc_msm_gpio_dump(s, 0, NULL);
+        htc_pmic_gpio_dump(s, 0, NULL);
+    }
+
+    spin_unlock_irqrestore(&gpio_lock, flags);
+    return 0;
+}
+
+static const struct seq_operations htc_gpiolib_seq_ops = {
+    .start = gpiolib_seq_start,
+    .next = gpiolib_seq_next,
+    .stop = gpiolib_seq_stop,
+    .show = list_gpios_show,
+};
+
+static int list_gpios_open(struct inode *inode, struct file *file)
+{
+    printk("%s\n",__func__);
+    return seq_open(file, &htc_gpiolib_seq_ops);
+}
+
+static const struct file_operations list_gpios_fops = {
+    .open           = list_gpios_open,
+    .read           = seq_read,
+    .llseek         = seq_lseek,
+    .release        = seq_release,
+};
+
+#endif
+
 static int __init gpiolib_debugfs_init(void)
 {
 	/* /sys/kernel/debug/gpio */
 	(void) debugfs_create_file("gpio", S_IFREG | S_IRUGO,
 				NULL, NULL, &gpiolib_operations);
+#ifdef CONFIG_HTC_POWER_DEBUG
+    debugfs_base = debugfs_create_dir("htc_gpio", NULL);
+    if (!debugfs_base)
+        return -ENOMEM;
+
+    if (!debugfs_create_file("list_gpios", S_IRUGO, debugfs_base,
+            NULL, &list_gpios_fops))
+        return -ENOMEM;
+
+#endif
 	return 0;
 }
 subsys_initcall(gpiolib_debugfs_init);

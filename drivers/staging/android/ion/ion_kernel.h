@@ -16,6 +16,12 @@
 #include <linux/dma-buf.h>
 #include "../uapi/ion.h"
 
+struct ion_mem_stat
+{
+	size_t inuse;
+	size_t total;
+};
+
 #ifdef CONFIG_ION
 
 /*
@@ -25,12 +31,18 @@
 struct dma_buf *ion_alloc(size_t len, unsigned int heap_id_mask,
 			  unsigned int flags);
 
+int ion_get_meminfo(struct ion_mem_stat *);
 #else
 
 static inline struct dma_buf *ion_alloc(size_t len, unsigned int heap_id_mask,
 					unsigned int flags)
 {
 	return ERR_PTR(-ENOMEM);
+}
+
+int ion_get_meminfo(struct ion_mem_stat *stat)
+{
+       return 0;
 }
 
 #endif /* CONFIG_ION */

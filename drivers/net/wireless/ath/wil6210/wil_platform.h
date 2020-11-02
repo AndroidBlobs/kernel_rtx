@@ -18,6 +18,11 @@
 #ifndef __WIL_PLATFORM_H__
 #define __WIL_PLATFORM_H__
 
+#define THERMAL_INVALID_TEMP        -255000
+#define THERMAL_WIGIG_POLLING_DELAY 10000
+#define THERMAL_FW_WAITING_TIMEOUT  2000
+#define THERMAL_READ_TEMP_INTERVAL  2000
+
 struct device;
 
 enum wil_platform_event {
@@ -58,6 +63,7 @@ struct wil_platform_ops {
 	int (*get_capa)(void *handle);
 	void (*set_features)(void *handle, int features);
 	int (*pci_linkdown_recovery)(void *handle);
+	void (*update_thermal)(void *handle, int temp_bb, int temp_rf);
 };
 
 /**

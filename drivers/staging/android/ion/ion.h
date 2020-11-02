@@ -62,6 +62,20 @@
 #define MAKE_ION_ALLOC_DMA_READY 0
 #endif
 
+/*
+ * enum ion_heap_mem_usage - list of all ion memory statistics categories
+ * @ION_IN_USE:		Number of pages used by clients from heaps in ION_HEAP_TYPE_SYSTEM type
+ * @ION_TOTAL:		Number of pages allocated from buddy, including pages in use
+ *			and in free page pools
+ *
+ * @ION_USAGE_MAX:	Helper for iterating over memory statistics
+ */
+enum ion_heap_mem_usage {
+	ION_IN_USE = 0U,
+	ION_TOTAL = 1U,
+	ION_USAGE_MAX,
+};
+
 /**
  * struct ion_platform_heap - defines a heap in the given platform
  * @type:	type of the heap from ion_heap_type enum
@@ -484,4 +498,21 @@ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 int ion_query_heaps(struct ion_heap_query *query);
 
+/*
+ * ion_alloc_inc_usage - Add memory usage into ion memory statistics
+ *			 according to its usage
+ * @usage - the location of used memory
+ * @size - the size of used memory
+ */
+void ion_alloc_inc_usage(const enum ion_heap_mem_usage usage,
+			 const size_t size);
+
+/*
+ * ion_alloc_dec_usage - subtract memory usage from ion memory statistics
+ *			 according to its usage
+ * @usage - the location of used memory
+ * @size - the size of used memory
+ */
+void ion_alloc_dec_usage(const enum ion_heap_mem_usage usage,
+			 const size_t size);
 #endif /* _ION_H */

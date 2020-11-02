@@ -182,7 +182,15 @@ struct pmic_gpio_state {
 	struct pinctrl_dev *ctrl;
 	struct gpio_chip chip;
 	const char **gpio_groups;
+#ifdef CONFIG_HTC_POWER_DEBUG
+    struct list_head chip_list;
+#endif
 };
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+static LIST_HEAD(state_chips);
+static DEFINE_MUTEX(state_chips_lock);
+#endif
 
 static const struct pinconf_generic_params pmic_gpio_bindings[] = {
 	{"qcom,pull-up-strength",	PMIC_GPIO_CONF_PULL_UP,		0},
@@ -635,6 +643,101 @@ static int pmic_gpio_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 	return ret;
 }
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+int htc_pmic_gpio_dump(struct seq_file *m, int curr_len, char *gpio_buffer)
+{
+    struct pmic_gpio_state *state;
+    struct pinctrl_dev *pctldev;
+    struct pmic_gpio_state *state_ctrl;
+    struct pmic_gpio_pad *pad;
+    int ret, val, function;
+    unsigned int i, len;
+    char read_buf[256];
+
+    static const char *const biases[] = {
+        "pull-up 30uA", "pull-up 1.5uA", "pull-up 31.5uA",
+        "pull-up 1.5uA + 30uA boost", "pull-down 10uA", "no pull"
+    };
+
+    static const char *const strengths[] = {
+        "no", "high", "medium", "low"
+    };
+
+    list_for_each_entry(state, &state_chips, chip_list) {
+        pctldev = state->ctrl;
+        state_ctrl = pinctrl_dev_get_drvdata(pctldev);
+
+        if (!state_ctrl) {
+            pr_info("pinctrl_dev_get_drvdata return null, skip this chipset.\n");
+            continue;
+        }
+
+        if (m)
+            seq_printf(m, "------------ %s -------------\n", state->chip.label);
+        else {
+            pr_info("------------ %s -------------\n", state->chip.label);
+            curr_len += sprintf(gpio_buffer + curr_len,
+            "------------ %s -------------\n", state->chip.label);
+        }
+
+        for (i = 0; i < state->chip.ngpio; i++) {
+            pad = pctldev->desc->pins[i].drv_data;
+
+            if (!pad) {
+                pr_info("drv_data[%d] is NULL, skip this pin\n", i);
+                continue;
+            }
+
+            val = pmic_gpio_read(state_ctrl, pad, PMIC_GPIO_REG_EN_CTL);
+            memset(read_buf, 0, sizeof(read_buf));
+            len = 0;
+
+            if (val < 0 || !(val >> PMIC_GPIO_REG_MASTER_EN_SHIFT)) {
+                if(m)
+                    seq_puts(m, " ---");
+                else {
+                    pr_info(" ---");
+                    curr_len += sprintf(gpio_buffer + curr_len, " ---");
+                }
+            } else {
+                if (pad->input_enabled) {
+                    ret = pmic_gpio_read(state, pad, PMIC_MPP_REG_RT_STS);
+                    if (ret < 0)
+                        return 0;
+                    ret &= PMIC_MPP_REG_RT_STS_VAL_MASK;
+                    pad->out_value = ret;
+                }
+
+                if (!pad->lv_mv_type && pad->function >= PMIC_GPIO_FUNC_INDEX_FUNC3) {
+                    function = pad->function + (PMIC_GPIO_FUNC_INDEX_DTEST1 -
+                                    PMIC_GPIO_FUNC_INDEX_FUNC3);
+                } else {
+                    function = pad->function;
+                }
+
+                len += sprintf(read_buf + len, "GPIO[%2d]: ", pad->gpio_idx);
+                len += sprintf(read_buf + len, "[mode]%4s ", pad->output_enabled ? "out" : "in");
+                len += sprintf(read_buf + len, "[src_sel]%7s ", pmic_gpio_functions[function]);
+                len += sprintf(read_buf + len, "[invert]%5s ", pad->out_value ? "high" : "low");
+                len += sprintf(read_buf + len, "[pull] %-27s", biases[pad->pullup]);
+                len += sprintf(read_buf + len, "[vin_sel]%2d ", pad->power_source);
+                len += sprintf(read_buf + len, "[out_strength] %-7s", strengths[pad->strength]);
+            }
+            read_buf[255] = '\0';
+            if (m)
+                seq_printf(m, "%s\n", read_buf);
+            else {
+                pr_info("%s\n", read_buf);
+                curr_len += sprintf(gpio_buffer +
+                curr_len, "%s\n", read_buf);
+            }
+        }
+    }  // list_for_each_entry(state, &state_chips, chip_list)
+    return curr_len;
+}
+#endif
+
+
 static void pmic_gpio_config_dbg_show(struct pinctrl_dev *pctldev,
 				      struct seq_file *s, unsigned pin)
 {
@@ -1059,6 +1162,12 @@ static int pmic_gpio_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, state);
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+    mutex_lock(&state_chips_lock);
+    list_add(&state->chip_list, &state_chips);
+    mutex_unlock(&state_chips_lock);
+#endif
 
 	state->dev = &pdev->dev;
 	state->map = dev_get_regmap(dev->parent, NULL);

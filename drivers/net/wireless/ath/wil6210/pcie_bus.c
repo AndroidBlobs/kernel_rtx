@@ -23,6 +23,7 @@
 #include "wil6210.h"
 #include <linux/rtnetlink.h>
 #include <linux/pm_runtime.h>
+#include <linux/kthread.h>
 
 static int n_msi = 3;
 module_param(n_msi, int, 0444);
@@ -38,6 +39,8 @@ static int wil6210_pm_notify(struct notifier_block *notify_block,
 			     unsigned long mode, void *unused);
 #endif /* CONFIG_PM_SLEEP */
 #endif /* CONFIG_PM */
+
+static struct task_struct *thermal_monitor_thr;
 
 static
 int wil_set_capabilities(struct wil6210_priv *wil)
@@ -407,6 +410,47 @@ static void wil_platform_ops_uninit(struct wil6210_priv *wil)
 	memset(&wil->platform_ops, 0, sizeof(wil->platform_ops));
 }
 
+static int wil6210_thermal_monitor(void *data)
+{
+	struct wil6210_priv *wil = (struct wil6210_priv *)data;
+	int ret;
+	int temp_rf = 0;
+	int temp_bb = 0;
+	ulong left = 0;
+	ulong to = msecs_to_jiffies(THERMAL_FW_WAITING_TIMEOUT);
+
+	// Wait for wil6210 firmware ready
+	while (!kthread_should_stop()) {
+		left = wait_for_completion_timeout(&wil->thermal_fw_ready, to);
+		if (0 == left) {
+			wil_err(wil, "Firmware not ready\n");
+		} else {
+			wil_info(wil, "FW is ready, wil6210_thermal_monitor start reading temp");
+			break;
+		}
+	}
+
+	while (!kthread_should_stop()) {
+		mutex_lock(&wil->mutex);
+		ret = wmi_get_temperature(wil, &temp_bb, &temp_rf);
+		mutex_unlock(&wil->mutex);
+		if (ret) {
+			wil_info(wil, "wil6210_thermal_monitor read temp failed");
+			msleep(THERMAL_READ_TEMP_INTERVAL);
+			continue;
+		}
+		if (wil->platform_ops.update_thermal)
+			wil->platform_ops.update_thermal(wil->platform_handle, temp_bb, temp_rf);
+		msleep(THERMAL_READ_TEMP_INTERVAL);
+	}
+	wil_info(wil, "wil6210_thermal_monitor exit! Set both temp to INVALID\n");
+
+	if (wil->platform_ops.update_thermal)
+		wil->platform_ops.update_thermal(wil->platform_handle, THERMAL_INVALID_TEMP,
+						 THERMAL_INVALID_TEMP);
+	return 0;
+}
+
 static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct wil6210_priv *wil;
@@ -560,6 +604,9 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	wil_pm_runtime_allow(wil);
 
+	thermal_monitor_thr = kthread_run(wil6210_thermal_monitor, wil,
+					  "wil6210_thermal_monitor");
+
 	return 0;
 
 if_remove:
@@ -586,6 +633,8 @@ static void wil_pcie_remove(struct pci_dev *pdev)
 	void __iomem *csr = wil->csr;
 
 	wil_dbg_misc(wil, "pcie_remove\n");
+	if (thermal_monitor_thr)
+		kthread_stop(thermal_monitor_thr);
 
 #ifdef CONFIG_PM
 #ifdef CONFIG_PM_SLEEP

@@ -3789,7 +3789,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	unsigned long ep_up_timeout = 0;
 	u32 link_check_max_count;
 
-	PCIE_DBG(dev, "RC%d: entry\n", dev->rc_idx);
+	PCIE_INFO(dev, "RC%d: entry\n", dev->rc_idx);
 
 	mutex_lock(&dev->setup_lock);
 
@@ -3860,7 +3860,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 					BIT(MSM_PCIE_INT_EVT_MSI_6) |
 					BIT(MSM_PCIE_INT_EVT_MSI_7));
 
-		PCIE_DBG(dev, "PCIe: RC%d: PCIE20_PARF_INT_ALL_MASK: 0x%x\n",
+		PCIE_INFO(dev, "PCIe: RC%d: PCIE20_PARF_INT_ALL_MASK: 0x%x\n",
 			dev->rc_idx,
 			readl_relaxed(dev->parf + PCIE20_PARF_INT_ALL_MASK));
 	}
@@ -3869,7 +3869,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 		PCIE20_PARF_SLV_ADDR_SPACE_SIZE);
 
 	if (dev->use_msi) {
-		PCIE_DBG(dev, "RC%d: enable WR halt.\n", dev->rc_idx);
+		PCIE_INFO(dev, "RC%d: enable WR halt.\n", dev->rc_idx);
 		val = dev->wr_halt_size ? dev->wr_halt_size :
 			readl_relaxed(dev->parf +
 				PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT);
@@ -3878,7 +3878,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 			PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT,
 			BIT(31) | val);
 
-		PCIE_DBG(dev,
+		PCIE_INFO(dev,
 			"RC%d: PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT: 0x%x.\n",
 			dev->rc_idx,
 			readl_relaxed(dev->parf +
@@ -3899,7 +3899,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 			goto link_fail;
 	}
 
-	PCIE_DBG(dev, "RC%d: waiting for phy ready...\n", dev->rc_idx);
+	PCIE_INFO(dev, "RC%d: waiting for phy ready...\n", dev->rc_idx);
 
 	do {
 		if (pcie_phy_is_ready(dev))
@@ -3909,7 +3909,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 					 REFCLK_STABILIZATION_DELAY_US_MAX);
 	} while (retries < PHY_READY_TIMEOUT_COUNT);
 
-	PCIE_DBG(dev, "RC%d: number of PHY retries:%ld.\n",
+	PCIE_INFO(dev, "RC%d: number of PHY retries:%ld.\n",
 		dev->rc_idx, retries);
 
 	if (pcie_phy_is_ready(dev))
@@ -3971,7 +3971,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	/* enable link training */
 	msm_pcie_write_mask(dev->parf + PCIE20_PARF_LTSSM, 0, BIT(8));
 
-	PCIE_DBG(dev, "%s", "check if link is up\n");
+	PCIE_INFO(dev, "%s", "check if link is up\n");
 
 	if (msm_pcie_link_check_max_count & BIT(dev->rc_idx))
 		link_check_max_count = msm_pcie_link_check_max_count >> 4;
@@ -3982,7 +3982,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	do {
 		usleep_range(LINK_UP_TIMEOUT_US_MIN, LINK_UP_TIMEOUT_US_MAX);
 		val =  readl_relaxed(dev->elbi + PCIE20_ELBI_SYS_STTS);
-		PCIE_DBG(dev, "PCIe RC%d: LTSSM_STATE:0x%x\n",
+		PCIE_INFO(dev, "PCIe RC%d: LTSSM_STATE:0x%x\n",
 			dev->rc_idx, (val >> 12) & 0x3f);
 	} while ((!(val & XMLH_LINK_UP) ||
 		!msm_pcie_confirm_linkup(dev, false, false, NULL))
@@ -3990,7 +3990,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 
 	if ((val & XMLH_LINK_UP) &&
 		msm_pcie_confirm_linkup(dev, false, false, NULL)) {
-		PCIE_DBG(dev, "Link is up after %d checkings\n",
+		PCIE_INFO(dev, "Link is up after %d checkings\n",
 			link_check_count);
 		PCIE_INFO(dev, "PCIe RC%d link initialized\n", dev->rc_idx);
 	} else {
@@ -4010,7 +4010,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	dev->link_turned_on_counter++;
 
 	if (dev->switch_latency) {
-		PCIE_DBG(dev, "switch_latency: %dms\n",
+		PCIE_INFO(dev, "switch_latency: %dms\n",
 			dev->switch_latency);
 		if (dev->switch_latency <= SWITCH_DELAY_MAX)
 			usleep_range(dev->switch_latency * 1000,
@@ -4030,7 +4030,7 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	}
 
 	if (readl_relaxed(dev->conf) != PCIE_LINK_DOWN) {
-		PCIE_DBG(dev,
+		PCIE_INFO(dev,
 			"PCIe: RC%d: endpoint config space is accessible\n",
 			dev->rc_idx);
 	} else {
@@ -4070,19 +4070,19 @@ clk_fail:
 out:
 	mutex_unlock(&dev->setup_lock);
 
-	PCIE_DBG(dev, "RC%d: exit\n", dev->rc_idx);
+	PCIE_INFO(dev, "RC%d: exit\n", dev->rc_idx);
 
 	return ret;
 }
 
 static void msm_pcie_disable(struct msm_pcie_dev_t *dev, u32 options)
 {
-	PCIE_DBG(dev, "RC%d: entry\n", dev->rc_idx);
+	PCIE_INFO(dev, "RC%d: entry\n", dev->rc_idx);
 
 	mutex_lock(&dev->setup_lock);
 
 	if (!dev->power_on) {
-		PCIE_DBG(dev,
+		PCIE_INFO(dev,
 			"PCIe: the link of RC%d is already power down.\n",
 			dev->rc_idx);
 		mutex_unlock(&dev->setup_lock);
@@ -4120,7 +4120,7 @@ static void msm_pcie_disable(struct msm_pcie_dev_t *dev, u32 options)
 
 	mutex_unlock(&dev->setup_lock);
 
-	PCIE_DBG(dev, "RC%d: exit\n", dev->rc_idx);
+	PCIE_INFO(dev, "RC%d: exit\n", dev->rc_idx);
 }
 
 static void msm_pcie_config_ep_aer(struct msm_pcie_dev_t *dev,

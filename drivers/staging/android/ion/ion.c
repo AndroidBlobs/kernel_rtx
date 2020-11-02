@@ -1322,3 +1322,31 @@ debugfs_done:
 	return idev;
 }
 EXPORT_SYMBOL(ion_device_create);
+
+static atomic_t ion_alloc_mem_usages[ION_USAGE_MAX]
+			= {[0 ... ION_USAGE_MAX-1] = ATOMIC_INIT(0)};
+
+void ion_alloc_inc_usage(const enum ion_heap_mem_usage usage,
+			 const size_t size)
+{
+	atomic_add(size, &ion_alloc_mem_usages[usage]);
+}
+
+void ion_alloc_dec_usage(const enum ion_heap_mem_usage usage,
+			 const size_t size)
+{
+	atomic_sub(size, &ion_alloc_mem_usages[usage]);
+}
+
+/*
+ * ion_get_meminfo - Calculate meminfo in ion heap.
+ *
+ * Returns memory usage in specified heaps and usages
+ */
+int ion_get_meminfo(struct ion_mem_stat *stat)
+{
+	stat->inuse = atomic_read(&ion_alloc_mem_usages[ION_IN_USE]);
+	stat->total = atomic_read(&ion_alloc_mem_usages[ION_TOTAL]);
+
+	return 0;
+}

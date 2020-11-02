@@ -905,7 +905,7 @@ static int of_parse_ch_cfg(struct mhi_controller *mhi_cntrl,
 		return -EINVAL;
 
 	mhi_cntrl->mhi_chan = kcalloc(mhi_cntrl->max_chan,
-				      sizeof(*mhi_cntrl->mhi_chan), GFP_KERNEL);
+				      sizeof(*mhi_cntrl->mhi_chan), GFP_KERNEL | ___GFP_NOFAIL);
 	if (!mhi_cntrl->mhi_chan)
 		return -ENOMEM;
 
@@ -1099,7 +1099,7 @@ int of_register_mhi_controller(struct mhi_controller *mhi_cntrl)
 		return -EINVAL;
 
 	mhi_cntrl->mhi_cmd = kcalloc(NR_OF_CMD_RINGS,
-				     sizeof(*mhi_cntrl->mhi_cmd), GFP_KERNEL);
+				     sizeof(*mhi_cntrl->mhi_cmd), GFP_KERNEL | ___GFP_NOFAIL);
 	if (!mhi_cntrl->mhi_cmd) {
 		ret = -ENOMEM;
 		goto error_alloc_cmd;
@@ -1224,7 +1224,7 @@ struct mhi_controller *mhi_alloc_controller(size_t size)
 {
 	struct mhi_controller *mhi_cntrl;
 
-	mhi_cntrl = kzalloc(size + sizeof(*mhi_cntrl), GFP_KERNEL);
+	mhi_cntrl = kzalloc(size + sizeof(*mhi_cntrl), GFP_KERNEL | ___GFP_NOFAIL);
 
 	if (mhi_cntrl && size)
 		mhi_controller_set_devdata(mhi_cntrl, mhi_cntrl + 1);

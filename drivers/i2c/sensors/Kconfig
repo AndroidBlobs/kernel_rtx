@@ -1,0 +1,39 @@
+#
+# Miscellaneous I2C sensor drivers configuration
+#
+
+menu "Miscellaneous I2C Chip support"
+
+config SENSORS_ONLY_BMA255
+        tristate "BMA255 acceleration sensor support"
+        depends on I2C=y
+        help
+          BMA255 ONLY G-sensor Driver implemented by HTC.
+
+config BOSCH_BMA250_ENABLE_INT1
+	tristate "BMA250 acceleration sensor interrupt INT1 support"
+	depends on BOSCH_BMA250=y
+        help
+	  If you say yes here you get INT1 support for Bosch Sensortec's
+	  acceleration sensors BMA250.
+
+config BOSCH_BMA250_ENABLE_INT2
+	tristate "BMA250 acceleration sensor interrupt INT2 support"
+	depends on BOSCH_BMA250=y
+	help
+	  If you say yes here you get INT2 support for Bosch Sensortec's
+	  acceleration sensors BMA250.
+
+config SENSORS_BMA250
+	tristate "BMA250 acceleration sensor support"
+	depends on I2C=y
+	help
+	  BMA250 G-sensor Driver implemented by HTC.
+
+config CIR_ALWAYS_READY
+        bool "BMA250 CIR Always Ready"
+	default n
+	help
+	  Enable CIR Always Ready
+
+endmenu

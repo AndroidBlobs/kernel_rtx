@@ -176,6 +176,30 @@ struct __extcon_info {
 		.name = "HMD",
 	},
 
+// HTC_AUD_START - HPKB:2469|HPKB:240|HPKB:6799
+        /* Audio virtual connector */
+	[EXTCON_AUDIO_BEATS] = {
+		.type = EXTCON_TYPE_MISC,
+		.id = EXTCON_AUDIO_BEATS,
+		.name = "AUDIO_Beats",
+	},
+	[EXTCON_AUDIO_DQ] = {
+		.type = EXTCON_TYPE_MISC,
+		.id = EXTCON_AUDIO_DQ,
+		.name = "AUDIO_DQ",
+	},
+	[EXTCON_AUDIO_FM] = {
+		.type = EXTCON_TYPE_MISC,
+		.id = EXTCON_AUDIO_FM,
+		.name = "AUDIO_FM",
+	},
+	[EXTCON_AUDIO_UNSUPPORTED] = {
+		.type = EXTCON_TYPE_MISC,
+		.id = EXTCON_AUDIO_UNSUPPORTED,
+		.name = "AUDIO_Unsupported_device",
+	},
+// HTC_AUD_END - HPKB:2469|HPKB:240|HPKB:6799
+
 	/* Miscellaneous external connector */
 	[EXTCON_DOCK] = {
 		.type = EXTCON_TYPE_MISC,

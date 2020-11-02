@@ -117,6 +117,7 @@ void free_buffer_page(struct ion_system_heap *heap,
 		else
 			ion_page_pool_free(pool, page);
 	} else {
+		ion_alloc_dec_usage(ION_TOTAL, 1 << order);
 		__free_pages(page, order);
 	}
 }
@@ -285,6 +286,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	struct pages_mem data;
 	unsigned int sz;
 	int vmid = get_secure_vmid(buffer->flags);
+	size_t total_pages = 0;
 
 	if (size / PAGE_SIZE > totalram_pages / 2)
 		return -ENOMEM;
@@ -325,6 +327,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 			++nents_sync;
 		}
 		size_remaining -= sz;
+		total_pages += 1 << info->order;
 		max_order = info->order;
 		i++;
 	}
@@ -390,6 +393,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	}
 
 	buffer->sg_table = table;
+	ion_alloc_inc_usage(ION_IN_USE, total_pages);
 	if (nents_sync)
 		sg_free_table(&table_sync);
 	ion_heap_free_pages_mem(&data);
@@ -445,9 +449,11 @@ void ion_system_heap_free(struct ion_buffer *buffer)
 			return;
 	}
 
-	for_each_sg(table->sgl, sg, table->nents, i)
+	for_each_sg(table->sgl, sg, table->nents, i) {
+		ion_alloc_dec_usage(ION_IN_USE, 1 << get_order(sg->length));
 		free_buffer_page(sys_heap, buffer, sg_page(sg),
 				 get_order(sg->length));
+	}
 	sg_free_table(table);
 	kfree(table);
 }

@@ -805,6 +805,7 @@ static void wmi_evt_ready(struct wil6210_vif *vif, int id, void *d, int len)
 	set_bit(wil_status_fwready, wil->status);
 	/* let the reset sequence continue */
 	complete(&wil->wmi_ready);
+	complete(&wil->thermal_fw_ready);
 }
 
 static void wmi_evt_rx_mgmt(struct wil6210_vif *vif, int id, void *d, int len)

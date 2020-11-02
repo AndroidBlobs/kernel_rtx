@@ -34,6 +34,7 @@ do { \
 	if (ipc_log) \
 		ipc_log_string(ipc_log, \
 			"[%s]: "__msg, __func__, ##__VA_ARGS__); \
+	pr_info("[esoc]"__msg, ##__VA_ARGS__); \
 } while (0)
 
 #define ESOC_DEV_MAX		4

@@ -30,6 +30,7 @@
 #include <linux/cpumask.h>
 #include <linux/cpufreq.h>
 #include <linux/sched/core_ctl.h>
+#include <linux/thermal.h>
 #include "wil_platform.h"
 #include "msm_11ad.h"
 
@@ -51,6 +52,9 @@
 #define VDDIO_MAX_UA	70300
 
 #define WIGIG_MIN_CPU_BOOST_KBPS	150000
+
+#define WIL_BB_THERM "wigig-bb-therm"
+#define WIL_RF_THERM "wigig-rf-therm"
 
 struct device;
 
@@ -83,6 +87,14 @@ struct msm11ad_clk {
 	const char *name;
 	struct clk *clk;
 	bool enabled;
+};
+
+struct msm11ad_tzd {
+	struct list_head list;
+	struct thermal_zone_device *tzd_ctx;
+	u32 temp;
+	int trip_temp;
+	int hyst_temp;
 };
 
 struct msm11ad_ctx {
@@ -140,6 +152,9 @@ struct msm11ad_ctx {
 
 	bool keep_radio_on_during_sleep;
 	int features;
+
+	/*Thermal */
+	struct msm11ad_tzd msm11ad_tzd_list;
 };
 
 static LIST_HEAD(dev_list);
@@ -1088,7 +1103,187 @@ static void msm_11ad_pci_event_cb(struct msm_pcie_notify *notify)
 	default:
 		break;
 	}
+}
 
+static int msm11ad_read_temp(struct thermal_zone_device *tzd, int *temp)
+{
+	int ret = 0;
+	struct msm11ad_tzd *pos;
+
+	if (IS_ERR_OR_NULL(tzd) || !temp) {
+		pr_err("msm11ad tzd or temp is invalid\n");
+		return -EINVAL;
+	}
+
+	pos = tzd->devdata;
+	*temp = pos->temp;
+	pr_debug("msm11ad (%s) read temp=%d\n", tzd->type, pos->temp);
+
+	return ret;
+}
+
+static int msm11ad_get_trip_type(struct thermal_zone_device *tzd, int trip,
+				 enum thermal_trip_type *type)
+{
+	if (IS_ERR_OR_NULL(tzd)) {
+		pr_err("msm11ad tzd or temp is invalid\n");
+		return -EINVAL;
+	}
+
+	*type = THERMAL_TRIP_PASSIVE;
+	return 0;
+}
+
+static int msm11ad_get_trip_temp(struct thermal_zone_device *tzd, int trip, int *temp)
+{
+	struct msm11ad_tzd *pos;
+
+	if (IS_ERR_OR_NULL(tzd) || !temp) {
+		pr_err("msm11ad tzd or temp is invalid\n");
+		return -EINVAL;
+	}
+
+	pos = tzd->devdata;
+	*temp = pos->trip_temp;
+	return 0;
+}
+
+static int msm11ad_set_trip_temp(struct thermal_zone_device *tzd, int trip, int temp)
+{
+	struct msm11ad_tzd *pos;
+
+	if (IS_ERR_OR_NULL(tzd)) {
+		pr_err("msm11ad tzd is invalid\n");
+		return -EINVAL;
+	}
+
+	pos = tzd->devdata;
+	if (temp > INT_MAX)
+		temp = INT_MAX;
+	else if (temp < 0)
+		temp = 0;
+
+	pos->trip_temp = temp;
+	return 0;
+}
+
+static int msm11ad_get_trip_hyst(struct thermal_zone_device *tzd, int trip, int *temp)
+{
+	struct msm11ad_tzd *pos;
+
+	if (IS_ERR_OR_NULL(tzd) || !temp) {
+		pr_err("msm11ad tzd or temp is invalid\n");
+		return -EINVAL;
+	}
+
+	pos = tzd->devdata;
+
+	*temp = pos->hyst_temp;
+	return 0;
+}
+
+static int msm11ad_set_trip_hyst(struct thermal_zone_device *tzd, int trip, int temp)
+{
+	struct msm11ad_tzd *pos;
+
+	if (IS_ERR_OR_NULL(tzd)) {
+		pr_err("msm11ad tzd or temp is invalid\n");
+		return -EINVAL;
+	}
+
+	pos = tzd->devdata;
+
+	if (temp > INT_MAX)
+		temp = INT_MAX;
+	else if (temp < 0)
+		temp = 0;
+
+	pos->hyst_temp = temp;
+	return 0;
+}
+
+static struct thermal_zone_device_ops msm11ad_tzd_ops = {
+	.get_temp = msm11ad_read_temp,
+	.get_trip_type = msm11ad_get_trip_type,
+	.get_trip_temp = msm11ad_get_trip_temp,
+	.set_trip_temp = msm11ad_set_trip_temp,
+	.get_trip_hyst = msm11ad_get_trip_hyst,
+	.set_trip_hyst = msm11ad_set_trip_hyst,
+};
+
+static int msm11ad_register_thermal(struct msm11ad_ctx *ctx)
+{
+	struct thermal_zone_params *tzp;
+	struct msm11ad_tzd *msm11ad_tzd_entry;
+	int ret = 0;
+
+	INIT_LIST_HEAD(&ctx->msm11ad_tzd_list.list);
+
+	msm11ad_tzd_entry = devm_kzalloc(ctx->dev, sizeof(struct msm11ad_tzd), GFP_KERNEL);
+	if (!msm11ad_tzd_entry) {
+		dev_err(ctx->dev, "msm11ad_tzd_entry kzalloc failed...\n");
+		return -1;
+	}
+
+	tzp = devm_kzalloc(ctx->dev, sizeof(*tzp), GFP_KERNEL);
+	if (!tzp) {
+		dev_err(ctx->dev, "tzp kzalloc failed...\n");
+		return -1;
+	}
+
+	snprintf(tzp->governor_name, sizeof(tzp->governor_name), "user_space");
+	tzp->no_hwmon = true;
+	msm11ad_tzd_entry->trip_temp = INT_MAX;
+	msm11ad_tzd_entry->temp = THERMAL_INVALID_TEMP;
+
+	msm11ad_tzd_entry->tzd_ctx =
+		thermal_zone_device_register(WIL_BB_THERM, 1, 1, msm11ad_tzd_entry,
+					     &msm11ad_tzd_ops, tzp, 0, THERMAL_WIGIG_POLLING_DELAY);
+	if (IS_ERR(msm11ad_tzd_entry->tzd_ctx)) {
+		dev_err(ctx->dev, "tzd register failed");
+		return -1;
+	}
+
+	list_add_tail(&msm11ad_tzd_entry->list, &ctx->msm11ad_tzd_list.list);
+
+	msm11ad_tzd_entry = devm_kzalloc(ctx->dev, sizeof(struct msm11ad_tzd), GFP_KERNEL);
+	if (!msm11ad_tzd_entry) {
+		dev_err(ctx->dev, "msm11ad_tzd_entry kzalloc failed...\n");
+		return -1;
+	}
+
+	tzp = devm_kzalloc(ctx->dev, sizeof(*tzp), GFP_KERNEL);
+	if (!tzp) {
+		dev_err(ctx->dev, "tzp kzalloc failed");
+		return -1;
+	}
+
+	snprintf(tzp->governor_name, sizeof(tzp->governor_name), "user_space");
+	tzp->no_hwmon = true;
+	msm11ad_tzd_entry->trip_temp = INT_MAX;
+	msm11ad_tzd_entry->temp = THERMAL_INVALID_TEMP;
+
+	msm11ad_tzd_entry->tzd_ctx =
+		thermal_zone_device_register(WIL_RF_THERM, 1, 1, msm11ad_tzd_entry,
+					     &msm11ad_tzd_ops, tzp, 0, THERMAL_WIGIG_POLLING_DELAY);
+	if (IS_ERR(msm11ad_tzd_entry->tzd_ctx)) {
+		dev_err(ctx->dev, "tzd register failed");
+		return -1;
+	}
+
+	list_add_tail(&msm11ad_tzd_entry->list, &ctx->msm11ad_tzd_list.list);
+	return ret;
+}
+
+static void msm11ad_unregister_thermal(struct msm11ad_ctx *ctx)
+{
+	struct msm11ad_tzd *pos, *tmp;
+
+	dev_dbg(ctx->dev, "unregister_thermal\n");
+	list_for_each_entry_safe (pos, tmp, &ctx->msm11ad_tzd_list.list, list) {
+		if (!IS_ERR(pos->tzd_ctx))
+			thermal_zone_device_unregister(pos->tzd_ctx);
+	}
 }
 
 static int msm_11ad_probe(struct platform_device *pdev)
@@ -1351,6 +1546,12 @@ static int msm_11ad_probe(struct platform_device *pdev)
 	list_add_tail(&ctx->list, &dev_list);
 	msm_11ad_suspend_power_off(ctx);
 
+	rc = msm11ad_register_thermal(ctx);
+	if (rc) {
+		dev_err(ctx->dev, "msm11ad_register_thermal failed: %d\n", rc);
+		msm11ad_unregister_thermal(ctx);
+	}
+
 	return 0;
 out_suspend:
 	msm_pcie_pm_control(MSM_PCIE_SUSPEND, pcidev->bus->number,
@@ -1384,6 +1585,7 @@ static int msm_11ad_remove(struct platform_device *pdev)
 	struct msm11ad_ctx *ctx = platform_get_drvdata(pdev);
 
 	msm_pcie_deregister_event(&ctx->pci_event);
+	msm11ad_unregister_thermal(ctx);
 	msm_11ad_ssr_deinit(ctx);
 	list_del(&ctx->list);
 	dev_info(ctx->dev, "%s: pdev %pK pcidev %pK\n", __func__, pdev,
@@ -1661,6 +1863,19 @@ static void ops_set_features(void *handle, int features)
 	ctx->features = features;
 }
 
+static void ops_update_thermal(void *handle, int temp_bb, int temp_rf)
+{
+	struct msm11ad_ctx *ctx = (struct msm11ad_ctx *)handle;
+	struct msm11ad_tzd *pos;
+
+	list_for_each_entry (pos, &ctx->msm11ad_tzd_list.list, list) {
+		if (strncmp(pos->tzd_ctx->type, WIL_BB_THERM, strlen(WIL_BB_THERM)) == 0)
+			pos->temp = temp_bb;
+		else if (strncmp(pos->tzd_ctx->type, WIL_RF_THERM, strlen(WIL_RF_THERM)) == 0)
+			pos->temp = temp_rf;
+	}
+}
+
 void *msm_11ad_dev_init(struct device *dev, struct wil_platform_ops *ops,
 			const struct wil_platform_rops *rops, void *wil_handle)
 {
@@ -1703,6 +1918,7 @@ void *msm_11ad_dev_init(struct device *dev, struct wil_platform_ops *ops,
 	ops->get_capa = ops_get_capa;
 	ops->set_features = ops_set_features;
 	ops->pci_linkdown_recovery = ops_pci_linkdown_recovery;
+	ops->update_thermal = ops_update_thermal;
 
 	return ctx;
 }

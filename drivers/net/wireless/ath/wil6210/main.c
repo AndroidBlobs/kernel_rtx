@@ -26,6 +26,26 @@
 #include "wmi.h"
 #include "boot_loader.h"
 
+/* HTC_WIFI_START */
+#include <linux/file.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/platform_device.h>
+#include <linux/string.h>
+#include <linux/export.h>
+#include <linux/proc_fs.h>
+#include <linux/of.h>
+#include <linux/random.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+
+
+#define NVS_MAX_SIZE    0x800U
+#define CALIBRATION_DATA_PATH "/calibration_data"
+#define WIGIG_FLASH_DATA "wigig_eeprom"
+#define WIGIG_MAC_OFFSET 0x0
+/* HTC_WIFI_END */
+
 #define WAIT_FOR_HALP_VOTE_MS 100
 #define WAIT_FOR_SCAN_ABORT_MS 1000
 #define WIL_DEFAULT_NUM_RX_STATUS_RINGS 1
@@ -51,6 +71,10 @@ unsigned short rx_ring_overflow_thrsh = WIL6210_RX_HIGH_TRSH_INIT;
 module_param(rx_ring_overflow_thrsh, ushort, 0444);
 MODULE_PARM_DESC(rx_ring_overflow_thrsh,
 		 " RX ring overflow threshold in descriptors.");
+
+/* HTC_WIFI_START */
+static u8 wigig_nvs_ram[NVS_MAX_SIZE];
+/* HTC_WIFI_END */
 
 /* We allow allocation of more than 1 page buffers to support large packets.
  * It is suboptimal behavior performance wise in case MTU above page size.
@@ -730,6 +754,7 @@ int wil_priv_init(struct wil6210_priv *wil)
 	init_completion(&wil->wmi_ready);
 	init_completion(&wil->wmi_call);
 	init_completion(&wil->halp.comp);
+	init_completion(&wil->thermal_fw_ready);
 
 	INIT_WORK(&wil->wmi_event_worker, wmi_event_worker);
 	INIT_WORK(&wil->fw_error_worker, wil_fw_error_worker);
@@ -1438,6 +1463,30 @@ static void wil_bl_crash_info(struct wil6210_priv *wil, bool is_err)
 			     bl_assert_code, bl_assert_blink, bl_magic_number);
 	}
 }
+/* HTC_WIFI_START */
+
+u8 *get_wigig_nvs_ram(void)
+{
+	struct device_node *offset =
+		of_find_node_by_path("/calibration_data");
+	int p_size;
+	u8 *p_data;
+
+	p_size = 0;
+	if (offset == NULL)
+		goto no_data;
+	p_data = (u8 *)
+		of_get_property(offset, "wigig_eeprom", &p_size);
+	if (p_data == NULL)
+		goto no_data;
+	if (p_size > NVS_MAX_SIZE)
+		goto no_data;
+	memcpy(wigig_nvs_ram, p_data, p_size);
+no_data:
+	return wigig_nvs_ram;
+}
+
+/* HTC_WIFI_END */
 
 static int wil_get_otp_info(struct wil6210_priv *wil)
 {
@@ -1445,6 +1494,10 @@ static int wil_get_otp_info(struct wil6210_priv *wil)
 	struct wiphy *wiphy = wil_to_wiphy(wil);
 	u8 mac[8];
 	int mac_addr;
+	/* HTC_WIFI_START */
+	u8 *ptr;
+	const char *src;
+	/* HTC_WIFI_END */
 
 	if (wil->hw_version >= HW_VER_TALYN_MB)
 		mac_addr = RGF_OTP_MAC_TALYN_MB;
@@ -1453,6 +1506,22 @@ static int wil_get_otp_info(struct wil6210_priv *wil)
 
 	wil_memcpy_fromio_32(mac, wil->csr + HOSTADDR(mac_addr),
 			     sizeof(mac));
+
+    /* HTC_WIFI_START */
+
+	ptr = get_wigig_nvs_ram();
+	src = (const char *)(ptr+WIGIG_MAC_OFFSET);
+	/*Intf0MacAddress*/
+
+	if (ptr == NULL || sscanf(src, "macaddr=%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
+				&mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+		pr_err("[HTC] No Default MAC !!!!! Use Random Mac ");
+	}else{
+		wil_info(wil, "Using OEM MAC. \n");
+	}
+	/* HTC_WIFI_END */
+
+
 	if (!is_valid_ether_addr(mac)) {
 		u8 dummy_mac[ETH_ALEN] = {
 			0x00, 0xde, 0xad, 0x12, 0x34, 0x56,
@@ -1759,6 +1828,7 @@ int wil_reset(struct wil6210_priv *wil, bool load_fw)
 	reinit_completion(&wil->wmi_ready);
 	reinit_completion(&wil->wmi_call);
 	reinit_completion(&wil->halp.comp);
+	reinit_completion(&wil->thermal_fw_ready);
 
 	clear_bit(wil_status_resetting, wil->status);
 

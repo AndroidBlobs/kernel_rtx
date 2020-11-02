@@ -40,6 +40,9 @@ static unsigned dm_verity_prefetch_cluster = DM_VERITY_DEFAULT_PREFETCH_SIZE;
 
 module_param_named(prefetch_cluster, dm_verity_prefetch_cluster, uint, S_IRUGO | S_IWUSR);
 
+static int dm_verity_hash_prefetch_min_size = CONFIG_DM_VERITY_HASH_PREFETCH_MIN_SIZE;
+module_param_named(prefetch_min_size, dm_verity_hash_prefetch_min_size, int, S_IRUGO | S_IWUSR);
+
 struct dm_verity_prefetch_work {
 	struct work_struct work;
 	struct dm_verity *v;
@@ -633,7 +636,7 @@ static void verity_prefetch_io(struct work_struct *work)
 		}
 no_prefetch_cluster:
 		// for emmc, it is more efficient to send bigger read
-		prefetch_size = max((sector_t)CONFIG_DM_VERITY_HASH_PREFETCH_MIN_SIZE,
+		prefetch_size = max((sector_t)dm_verity_hash_prefetch_min_size,
 			hash_block_end - hash_block_start + 1);
 		if ((hash_block_start + prefetch_size) >= (v->hash_start + v->hash_blocks)) {
 			prefetch_size = hash_block_end - hash_block_start + 1;
