@@ -439,13 +439,16 @@
 };
 
 &audio_apr {
-	snd_9360: sound-pahu {
-		status = "disabled";
-	};
-
-	snd_934x: sound-tavil {
-		status = "disabled";
-	};
+/* HTC_AUD_START */
+/*	snd_9360: sound-pahu {
+ *		status = "disabled";
+ *	};
+ *
+ *	snd_934x: sound-tavil {
+ *		status = "disabled";
+ *	};
+ */
+/* HTC_AUD_END */
 
 	sound-adp-star {
 		compatible = "qcom,sa8155-asoc-snd-adp-star";

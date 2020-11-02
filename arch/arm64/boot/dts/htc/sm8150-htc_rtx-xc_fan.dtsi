@@ -1,0 +1,79 @@
+/*
+ * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+/*
+ * sm8150-htc_rt5-fan: fan controller configuration
+ */
+
+&cam_cci0{
+	status = "disabled";
+};
+
+
+&tlmm {
+
+		 max31760_pwr_active: max31760_pwr_active {
+			config {
+				pins = "gpio16";
+				function = "gpio";
+				drive-strength = <8>;
+				bias-disable;
+				output-high;
+			 };
+		 };
+
+		 max31760_3v3_active: max31760_3v3_active {
+			 config {
+				pins = "gpio15";
+				function = "gpio";
+				drive-strength = <8>;
+				bias-disable;
+				output-high;
+			 };
+  		 };
+
+		 max31760_pwr_sleep: max31760_pwr_sleep {
+			 config {
+				pins = "gpio16";
+				function = "gpio";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			 };
+		 };
+		 max31760_3v3_sleep: max31760_3v3_sleep {
+			 config {
+				pins = "gpio15";
+				function = "gpio";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			 };
+  		 };
+ };
+
+//I2C
+&qupv3_se9_i2c {
+    /* FAN MAX31760 test */
+    status = "okay";
+
+    max31760@50 {
+		compatible = "max31760";
+		reg = <0x50>;
+		interrupt-parent = <&tlmm>;
+
+    	pinctrl-names = "max31760_active","max31760_sleep";
+		pinctrl-0 = <&max31760_pwr_active &max31760_3v3_active>;
+		pinctrl-1 = <&max31760_pwr_sleep &max31760_3v3_sleep>;
+	};
+};

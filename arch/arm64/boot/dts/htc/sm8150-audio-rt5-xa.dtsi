@@ -1,0 +1,95 @@
+/* sm8150 rt5 XA Audio Config */
+
+/* We use gpio18 for spk reset pin, but it has been used by camera. So disable it. */
+&cam_cci0{
+	status = "disabled";
+};
+
+&tlmm {
+	/* AUD_SPK_AMP_RST */
+	aud_spk_amp_rst_default: aud_spk_amp_rst_default {
+		config {
+			pins = "gpio18";
+			function = "gpio";
+			drive-strength = <2>; /* 2mA */
+			bias-disable; /* No PULL */
+			output-high;
+		};
+	};
+};
+
+&pm8150l_gpios {
+	aud_tas2557_irq2 { /* AUD_TAS2557_IRQ2 */
+		aud_tas2557_irq2_default: aud_tas2557_irq2_default {
+			pins = "gpio2";
+			function = "normal";
+			input-enable;
+			bias-disable;
+			power-source = <0>;
+		};
+	};
+
+
+	aud_tas2557_irq1 { /* AUD_TAS2557_IRQ1 */
+		aud_tas2557_irq1_default: aud_tas2557_irq1_default {
+			pins = "gpio1";
+			function = "normal";
+			input-enable;
+			bias-disable;
+			power-source = <0>;
+		};
+	};
+};
+
+&snd_934x {
+	/* We do not use Qualcomm WSA speaker amp */
+	qcom,wsa-max-devs = <0>;
+};
+
+
+&soc{
+	/* TI config for spk chip */
+	i2c@890000 { /* qupv3_se4_i2c */
+		tas2557s@4c {
+			compatible = "ti,tas2557s";
+			reg = <0x4c>;
+			ti,cdc-reset-gpio = <&tlmm 18 0>;
+
+			ti,irq-gpio-left = <&pm8150l_gpios 1 0>;
+			ti,irq-gpio-right = <&pm8150l_gpios 2 0>;
+			ti,left-channel = <0x4c>;
+			ti,right-channel = <0x4d>;
+			ti,echo-ref = <1>;   /* 0, left channel; 1, right channel; 2, both */
+			ti,i2s-bits = <16>;   /* support 16, 24, 32 */
+			ti,load = <0>;   /* 0, 8Ohm; 1, 6Ohm; 2, 4Ohm */
+			status = "ok";
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&aud_tas2557_irq2_default
+					&aud_spk_amp_rst_default
+					&aud_tas2557_irq1_default>;
+		};
+	};
+};
+
+&dai_mi2s1 {
+	compatible = "qcom,msm-dai-q6-mi2s";
+	qcom,msm-dai-q6-mi2s-dev-id = <1>;
+	qcom,msm-mi2s-rx-lines = <2>;
+	qcom,msm-mi2s-tx-lines = <1>;
+	qcom,msm-mi2s-slave = <0>;
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&sec_mi2s_active
+			&sec_mi2s_sd0_active
+			&sec_mi2s_sd1_active>;
+	pinctrl-1 = <&sec_mi2s_sleep
+			&sec_mi2s_sd0_sleep
+			&sec_mi2s_sd1_sleep>;
+};
+
+&soc {
+        htc-misc-extcon {
+                compatible = "htc-misc-extcon";
+                status = "ok";
+        };
+};

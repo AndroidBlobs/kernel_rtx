@@ -1,0 +1,21 @@
+#include "sm8150-htc_rtx-batt-xb.dtsi"
+
+&pm8150b_gpios {
+    acok_dcjack_switch {
+        acok_dcjack_switch_default: acok_dcjack_switch_default {
+            pins = "gpio12";
+            function = "normal";
+            output-enable;
+            input-disable;
+        };
+    };
+};
+
+&pm8150b_charger {
+    htc,acok-dcjack-switch-gpio = <&pm8150b_gpios 12 GPIO_ACTIVE_HIGH>;
+
+    pinctrl-0 = <&acok_usb_default
+             &acok_dcjack_ovp_default
+             &acok_dcjack_switch_default>;
+
+};

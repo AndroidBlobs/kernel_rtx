@@ -13,6 +13,7 @@
 #include <dt-bindings/thermal/thermal.h>
 
 &thermal_zones {
+	/*
 	pm8150b_tz {
 		cooling-maps {
 			trip0_bat {
@@ -29,6 +30,7 @@
 			};
 		};
 	};
+	*/
 
 	pm8150_tz {
 		cooling-maps {
@@ -126,6 +128,7 @@
 	};
 
 	soc {
+/*
 		cooling-maps {
 			soc_cpu4 {
 				trip = <&soc_trip>;
@@ -152,6 +155,7 @@
 						THERMAL_MAX_LIMIT>;
 			};
 		};
+*/
 	};
 
 	pm8150b-vbat-lvl0 {

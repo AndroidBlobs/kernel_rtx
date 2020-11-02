@@ -1,0 +1,21 @@
+#include "sm8150-htc_rtx-batt-common.dtsi"
+
+&pm8150b_gpios {
+	acok_dcjack_ovp {
+		acok_dcjack_ovp_default: acok_dcjack_ovp_default {
+			pins = "gpio2";
+			function = "normal";
+			input-enable;
+			bias-pull-up;
+			qcom,pull-up-strength = <PMIC_GPIO_PULL_UP_30>;
+			power-source = <0>;
+		};
+	};
+};
+
+&pm8150b_charger {
+	htc,acok-dcjack-ovp-gpio = <&pm8150b_gpios 2 GPIO_ACTIVE_HIGH>;
+
+	pinctrl-0 = <&acok_usb_default &acok_dcjack_ovp_default>;
+
+};

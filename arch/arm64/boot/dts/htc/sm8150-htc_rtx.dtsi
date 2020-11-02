@@ -1,0 +1,123 @@
+#include "dsi-panel-ft8607-truly-hd-video.dtsi"
+
+&soc {
+	dsi_panel_pwr_supply_ft8607: dsi_panel_pwr_supply_ft8607 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		qcom,panel-supply-entry@0 {
+			reg = <0>;
+			qcom,supply-name = "vddio";
+			qcom,supply-min-voltage = <1800000>;
+			qcom,supply-max-voltage = <1800000>;
+			qcom,supply-enable-load = <62000>;
+			qcom,supply-disable-load = <80>;
+			qcom,supply-pre-on-sleep = <0>;
+			qcom,supply-post-on-sleep = <0>;
+			qcom,supply-pre-off-sleep = <0>;
+			qcom,supply-post-off-sleep = <0>;
+		};
+
+		qcom,panel-supply-entry@1 {
+			reg = <1>;
+			qcom,supply-name = "vdd";
+			qcom,supply-min-voltage = <2800000>;
+			qcom,supply-max-voltage = <2800000>;
+			qcom,supply-enable-load = <857000>;
+			qcom,supply-disable-load = <0>;
+			qcom,supply-pre-on-sleep = <0>;
+			qcom,supply-post-on-sleep = <2>;
+			qcom,supply-pre-off-sleep = <5>;
+			qcom,supply-post-off-sleep = <3>;
+		};
+	};
+
+	dsi_ft8607_video_display: qcom,dsi-display@19 {
+		label = "dsi_ft8607_video_display";
+		qcom,display-type = "primary";
+
+		qcom,dsi-ctrl-num = <0>;
+		qcom,dsi-phy-num = <0>;
+		qcom,dsi-select-clocks = "mux_byte_clk0", "mux_pixel_clk0";
+
+		qcom,dsi-panel = <&dsi_ft8607_video>;
+
+		qcom,dsi-display-active;
+	};
+};
+
+&dsi_ft8607_video {
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_ft8607>;
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,platform-te-gpio = <&tlmm 8 0>;
+	qcom,platform-reset-gpio = <&tlmm 6 0>;
+
+	qcom,mdss-dsi-t-clk-post = <0x14>;
+	qcom,mdss-dsi-t-clk-pre = <0x10>;
+
+	htc,brt-bl-table = <10 15>, <128 1019>, <255 3276>;
+
+	qcom,mdss-dsi-display-timings {
+		timing@0 {
+			qcom,mdss-dsi-panel-phy-timings = [00 11 03  04 1E 1E 04 04 02 02 04 00 10 14];
+			qcom,display-topology = <1 0 1>;
+			qcom,default-topology-index = <0>;
+		};
+	};
+
+};
+
+&sde_dsi {
+	qcom,dsi-display-list =
+			<&dsi_ft8607_video_display
+			&dsi_sim_vid_display
+			&dsi_dual_sim_vid_display
+			&dsi_sim_cmd_display
+			&dsi_dual_sim_cmd_display>;
+
+	vddio-supply = <&pm8150_l14>;
+	vdd-supply = <&pm8150_l17>;
+
+	pinctrl-names = "panel_active", "panel_suspend";
+	pinctrl-0 = <&sde_dsi_active &sde_te_active>;
+	pinctrl-1 = <&sde_dsi_suspend &sde_te_suspend>;
+};
+
+&pm8150l_wled {
+	qcom,string-cfg = <3>;
+	qcom,fs-current-limit = <25000>;
+	status = "ok";
+};
+
+&sde_dp {
+        qcom,dp-aux-switch = <&fsa3030>;
+};
+
+&pmx_sde {
+	sde_dsi_active: sde_dsi_active {
+		mux {
+			pins = "gpio6";
+			function = "gpio";
+		};
+
+		config {
+			pins = "gpio6";
+			drive-strength = <8>;   /* 8 mA */
+			bias-disable = <0>;   /* no pull */
+		};
+	};
+	sde_dsi_suspend: sde_dsi_suspend {
+		mux {
+			pins = "gpio6";
+			function = "gpio";
+		};
+
+		config {
+			pins = "gpio6";
+			drive-strength = <2>;   /* 2 mA */
+			bias-pull-down;         /* PULL DOWN */
+		};
+	};
+};

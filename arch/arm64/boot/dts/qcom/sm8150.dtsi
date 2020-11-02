@@ -576,7 +576,7 @@
 			compatible = "android,firmware";
 			vbmeta {
 				compatible = "android,vbmeta";
-				parts = "vbmeta,boot,system,vendor,dtbo,vm-linux";
+				parts = "vbmeta,boot,system,vendor,dtbo";
 			};
 			fstab {
 				compatible = "android,fstab";
@@ -587,14 +587,6 @@
 					mnt_flags = "ro,barrier=1,discard";
 					fsmgr_flags = "wait,slotselect,avb";
 					status = "ok";
-				};
-				vm-linux {
-					compatible = "android,vm-linux";
-					dev = "/dev/block/platform/soc/8804000.sdhci/by-name/vm-linux";
-					type = "emmc";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait,slotselect";
-					status = "";
 				};
 			};
 		};
@@ -1324,6 +1316,12 @@
 		restart_reason@65c {
 			compatible = "qcom,msm-imem-restart_reason";
 			reg = <0x65c 4>;
+		};
+
+		restart_info@a94 {
+			compatible = "htc,msm-imem-restart_info";
+			reg = <0xa94 100>;
+			info_size = <100>;
 		};
 
 		dload_type@1c {
@@ -3823,7 +3821,7 @@
 
 	wil6210: qcom,wil6210 {
 		compatible = "qcom,wil6210";
-		qcom,pcie-parent = <&pcie1>;
+		qcom,pcie-parent = <&pcie0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&wil6210_refclk3_en_pin>;
 		qcom,wigig-en = <&tlmm 131 0>;

@@ -1,0 +1,65 @@
+/*
+* FocalTech touch controller
+* 
+* The focaltech controller is connected to host processor via i2c.
+* The controller generates interrupts when the user touches the panel.
+* The host controller is expected to read the touch coordinates over i2c and pass the coordinates to the rest of the system.
+*/
+&tlmm {  
+        pmx_ts {
+                ts_intr_default: ts_intr_default {
+                        mux {
+                                pins = "gpio122";
+                                function = "gpio";
+                        };
+
+                        config {
+                                pins = "gpio122";
+                                drive-strength = <2>;
+                                bias-pull-up;
+                        };
+                };
+
+                ts_rst_default: ts_rst_default {
+                        mux {
+                                pins = "gpio54";
+                                function = "gpio";
+                        };
+
+                        config {
+                                pins = "gpio54";
+                                drive-strength = <2>;
+                                bias-disable; /* No PULL */
+                                output-low;
+                        };
+                };
+        };
+};
+
+&qupv3_se17_i2c_active {
+        config {
+                drive-strength = <8>;
+        };
+};
+&qupv3_se17_i2c_sleep {
+        config {
+                drive-strength = <8>;
+        };
+};
+
+&qupv3_se17_i2c {
+    status = "okay";
+
+        focaltech@38 {
+                compatible = "focaltech,fts";
+                reg = <0x38>;
+                interrupt-parent = <&tlmm>;
+                interrupts = <122 0x2008>; /* IRQF_ONESHOT | IRQF_TRIGGER_LOW */
+                focaltech,reset-gpio = <&tlmm 54 0x01>;
+                focaltech,irq-gpio = <&tlmm 122 0x02>;
+                focaltech,max-touch-number = <10>;
+                focaltech,display-coords =  <0 0 720 1280>;
+                pinctrl-names = "default";
+                pinctrl-0 = <&ts_intr_default &ts_rst_default>;
+        };
+};

@@ -428,6 +428,8 @@
 		compatible = "qcom,msm-pcm-hostless";
 	};
 
+/* HTC_AUD_START */
+#if 0
 	audio_apr: qcom,msm-audio-apr {
 		compatible = "qcom,msm-audio-apr";
 		qcom,subsys-name = "apr_adsp";
@@ -439,6 +441,20 @@
 			iommus = <&apps_smmu 0x1b21 0x0>;
 		};
 	};
+#else
+	audio_apr: qcom,msm-audio-apr {
+		compatible = "qcom,msm-audio-apr";
+		qcom,subsys-name = "apr_adsp";
+	};
+
+	msm_audio_ion: qcom,msm-audio-ion {
+		compatible = "qcom,msm-audio-ion";
+		qcom,smmu-version = <2>;
+		qcom,smmu-enabled;
+		iommus = <&apps_smmu 0x1b21 0x0>;
+	};
+#endif
+/* HTC_AUD_END */
 
 	dai_pri_auxpcm: qcom,msm-pri-auxpcm {
 		compatible = "qcom,msm-auxpcm-dev";

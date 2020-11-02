@@ -1,0 +1,49 @@
+&soc {
+	rpmh-regulator-ldoc7 {
+		L7C: pm8150l_l7: regulator-pm8150l-l7 {
+			regulator-boot-on;
+			regulator-always-on;
+		};
+	};
+
+	rpmh-regulator-ldoc8 {
+		L8C: pm8150l_l8: regulator-pm8150l-l8 {
+			regulator-boot-on;
+			regulator-always-on;
+		};
+	};
+};
+
+&tlmm {
+	bma255_acc_int: bma255_acc_int {
+		mux {
+			pins = "gpio132", "gpio133";
+			function = "gpio";
+		};
+		config {
+			pins = "gpio132", "gpio133";
+			drive-strength = <2>;   /* 2 mA */
+			bias-disable;           /* No PULL */
+		};
+	};
+};
+
+&qupv3_se7_i2c {
+	g_sensor_bma250@18 {
+		compatible = "htc_g_sensor,bma250_no_comp";
+		reg = <0x18>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <132 0x0>;
+		SR_1v8-supply = <&pm8150l_l8>;
+		g_sensor_bma250,intr        = <&tlmm 132 0x00>;
+		g_sensor_bma250,chip_layout = <0>;
+		g_sensor_bma250,axis_map_x  = <0>;
+		g_sensor_bma250,axis_map_y  = <1>;
+		g_sensor_bma250,axis_map_z  = <2>;
+		g_sensor_bma250,negate_x    = <1>;
+		g_sensor_bma250,negate_y    = <1>;
+		g_sensor_bma250,negate_z    = <0>;
+		pinctrl-names = "bma255_acc_intr_init";
+		pinctrl-0 = <&bma255_acc_int>;
+	};
+};

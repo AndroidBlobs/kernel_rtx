@@ -1,0 +1,72 @@
+/*
+ * sm8150-htc_rtx-batt-common: battery common configs of sm8150 HTC projects
+ */
+
+/delete-node/ &mtp_batterydata;
+/delete-node/ &pm8150b_qnovo;
+
+&vendor {
+	rtx_batterydata: qcom,battery-data {
+		#include "batterydata-rtx-id1.dtsi"
+	};
+
+	htc_battery_dt {
+		compatible = "htc,htc_battery_dt";
+		htc,usb-conn-thermal-zone-name = "conn-therm";
+		htc,fastchg-current-ma = <3800>;
+		htc,allow-power-off-voltage = <3320>;
+		htc,batt-full-current-ma = <500>;
+		htc,health-level-max = <6>;
+		htc,batt-health-good = <2>;
+		htc,qc3-curr-limit-ma = <1700>;
+		htc,qc2-curr-limit-ma = <1700>;
+		htc,chg-vbatt-thresholds = <0 0 0 0 3899 3899>;     /* htc,health-level-max * 1 */
+		htc,chg-vbatt-recover-thresholds = <0 0 0 0 3800 3900>;
+		htc,chg-temp-thresholds =       <(-10000)   50>,        /* htc,health-level-max * 2 */
+		                                <      30  220>,
+		                                <     401  200>,        /* GOOD */
+		                                <     451  380>,
+		                                <     531  430>,
+		                                <   10000  510>;
+		htc,chg-fcc-limits = <                                  /* 4 * htc,health-level-max */
+		           0 1500 3800 3000 1000    0
+		           0 1500 3800 3000 1000    0
+		           0 1500 3800 3000    0    0
+		           0 1500 3800 3000    0    0
+		>;
+	};
+};
+
+&pm8150b_fg {
+	qcom,battery-data = <&rtx_batterydata>;
+	qcom,fg-sys-term-current = <(-500)>;
+};
+
+&pm8150b_gpios {
+	acok_usb {
+		acok_usb_default: acok_usb_default {
+			pins = "gpio5";
+			function = "normal";
+			input-enable;
+			bias-pull-up;
+			qcom,pull-up-strength = <PMIC_GPIO_PULL_UP_30>;
+			power-source = <0>;
+		};
+	};
+};
+
+&pm8150b_charger {
+	qcom,battery-data = <&rtx_batterydata>;
+	qcom,sec-charger-config = <2>;
+	qcom,auto-recharge-soc = <92>;
+	qcom,chg-term-src = <1>;
+	qcom,chg-term-base-current-ma = <50>;
+	qcom,chg-term-current-ma = <(-400)>;
+
+	/delete-property/ qcom,step-charging-enable;
+	/delete-property/ qcom,sw-jeita-enable;
+
+	htc,acok-usb-gpio = <&pm8150b_gpios 5 GPIO_ACTIVE_HIGH>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&acok_usb_default>;
+};

@@ -1,0 +1,131 @@
+/* Secondary USB controller power pin*/
+&tlmm {
+        usb1_otg_vbus_en: usb1_otg_vbus_en {
+                config {
+                        pins = "gpio125";
+                        function = "gpio";
+                        bias-pull-down;
+                        drive-strength = <2>;
+                };
+        };
+};
+
+&usb1 {
+        status = "okay";
+        htc,usb1_otg_vbus_en = <&tlmm 125 0>;
+};
+
+&usb2_phy1 {
+        status = "okay";
+};
+
+&usb_qmp_phy {
+        status = "okay";
+};
+
+/* Primary USB controller OTG Vbus pin*/
+&tlmm {
+        usb0_otg_vbus: usb0_otg_vbus {
+                config {
+                        pins = "gpio120";
+                        function = "gpio";
+                        bias-pull-down;
+                        drive-strength = <2>;
+                };
+        };
+};
+
+&pm8150b_charger {
+	htc,usb0_otg_vbus = <&tlmm 120 0>;
+};
+
+/* Primary USB controller OTG VCONN pin*/
+&tlmm {
+        usb0_otg_vconn: usb0_otg_vconn {
+                config {
+                        pins = "gpio23";
+                        function = "gpio";
+                        bias-disable;
+                        drive-strength = <2>;
+                };
+        };
+};
+
+&pm8150b_charger {
+        htc,usb0_otg_vconn = <&tlmm 23 0>;
+};
+
+&pm8150b_pdphy {
+        qcom,vconn-uses-external-source = <1>;
+};
+
+&usb2_phy0 {
+        qcom,param-override-seq = <0x43 0x70
+                                   0x67 0x6c>;
+};
+
+/*USB Switch FSA3030 GPIO pin*/
+&soc {
+	fsa3030: fsa3030{
+        compatible = "fsa3030";
+        label = "USB_Switch_gpio";
+        pinctrl-names = "usb_hph_fsa3030_Hi_Z", "usb_hph_fsa3030_ori_cc1", "usb_hph_fsa3030_ori_cc2", "usb_hph_fsa3030_uart";
+        pinctrl-0 = <&usb_hph_fsa3030_sel0_high &usb_hph_fsa3030_sel1_high>;
+        pinctrl-1 = <&usb_hph_fsa3030_sel0_high &usb_hph_fsa3030_sel1_low>;
+        pinctrl-2 = <&usb_hph_fsa3030_sel0_low &usb_hph_fsa3030_sel1_high>;
+        pinctrl-3 = <&usb_hph_fsa3030_sel0_low &usb_hph_fsa3030_sel1_low>;
+    };
+};
+
+&tlmm {
+    usb_switch_gpio {
+        usb_hph_fsa3030_sel0_high: usb_hph_fsa3030_sel0_high{
+            mux{
+                pins = "gpio20";
+                function = "gpio";
+            };
+            config {
+                pins = "gpio20";
+                bias-disable;
+                output-high;
+                drive-strength = <2>;
+            };
+        };
+        usb_hph_fsa3030_sel0_low: usb_hph_fsa3030_sel0_low{
+            mux{
+                pins = "gpio20";
+                function = "gpio";
+            };
+            config {
+                pins = "gpio20";
+                bias-disable;
+                output-low;
+                drive-strength = <2>;
+            };
+        };
+        usb_hph_fsa3030_sel1_high: usb_hph_fsa3030_sel1_high{
+            mux{
+                pins = "gpio19";
+                function = "gpio";
+            };
+            config {
+                pins = "gpio19";
+                bias-disable;
+                output-high;
+                drive-strength = <2>;
+            };
+        };
+        usb_hph_fsa3030_sel1_low: usb_hph_fsa3030_sel1_low{
+            mux{
+                pins = "gpio19";
+                function = "gpio";
+            };
+            config {
+                pins = "gpio19";
+                bias-disable;
+                output-low;
+                drive-strength = <2>;
+            };
+        };
+    };
+};
